@@ -20,7 +20,7 @@ Características:
 
 Uso:
     python3 build_singlefile_site.py
-    
+
 Salida:
     orion/ORION-HACKING-singlefile.html
 """
@@ -60,7 +60,7 @@ def slugify(value: str) -> str:
 def classify(path: pathlib.Path) -> str:
     """Clasifica archivo por su directorio."""
     rel = path.relative_to(REPO_ROOT).as_posix()
-    
+
     if rel == "README.md":
         return "root"
     if rel.startswith("orion/references/"):
@@ -77,14 +77,14 @@ def classify(path: pathlib.Path) -> str:
         return "result"
     if rel.startswith("samples/"):
         return "sample"
-    
+
     return "other"
 
 
 def title_from_path(path: pathlib.Path) -> str:
     """Extrae título de un archivo (primero encabezado H1 para .md)."""
-    rel = path.relative_to(REPO_ROOT).as_posix()
-    
+    path.relative_to(REPO_ROOT)  # Require a path in the published source tree.
+
     if path.suffix == ".md":
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
@@ -95,7 +95,7 @@ def title_from_path(path: pathlib.Path) -> str:
                         return title
         except Exception:
             pass
-    
+
     # Fallback: nombre del archivo limpio
     return path.stem.replace("-", " ").replace("_", " ").title()
 
@@ -114,8 +114,8 @@ def extract_summary(path: pathlib.Path, max_length: int = 200) -> str:
         text = path.read_text(encoding="utf-8", errors="ignore")
         # Omite encabezados markdown
         lines = [
-            line.strip() 
-            for line in text.splitlines() 
+            line.strip()
+            for line in text.splitlines()
             if line.strip() and not line.startswith("#")
         ]
         summary = " ".join(lines[:3])  # Primeras 3 líneas no vacías
@@ -151,14 +151,14 @@ def files_to_include() -> List[pathlib.Path]:
 def build_sections(files: List[pathlib.Path]) -> Tuple[str, str, List[Dict], Dict]:
     """
     Construye secciones de navegación, cuerpo y dataset.
-    
+
     Retorna: (nav_html, body_html, data_array, statistics)
     """
     nav_parts = []
     body_parts = []
     data = []
     stats = defaultdict(int)
-    
+
     for path in files:
         rel = path.relative_to(REPO_ROOT).as_posix()
         category = classify(path)
@@ -166,16 +166,16 @@ def build_sections(files: List[pathlib.Path]) -> Tuple[str, str, List[Dict], Dic
         anchor = slugify(rel)
         file_size = get_file_size(path)
         summary = extract_summary(path)
-        
+
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             text = "[Error reading file]"
-        
+
         # Stats
         stats[category] += 1
         stats["total_size"] += file_size
-        
+
         # Navegación
         nav_parts.append(
             f'<a class="toc-link" href="#{anchor}" data-category="{category}" '
@@ -185,11 +185,11 @@ def build_sections(files: List[pathlib.Path]) -> Tuple[str, str, List[Dict], Dic
             f'<span class="toc-size">{file_size:,} bytes</span>'
             f'</a>'
         )
-        
+
         # Cuerpo del documento
         body_parts.append(
-            f'''<article id="{anchor}" class="doc-card" data-category="{category}" 
-                    data-path="{html.escape(rel)}" data-title="{html.escape(title)}" 
+            f'''<article id="{anchor}" class="doc-card" data-category="{category}"
+                    data-path="{html.escape(rel)}" data-title="{html.escape(title)}"
                     data-size="{file_size}" data-index="{len(data)}">
   <header class="doc-header">
     <div class="doc-meta">
@@ -206,7 +206,7 @@ def build_sections(files: List[pathlib.Path]) -> Tuple[str, str, List[Dict], Dic
   </section>
 </article>'''
         )
-        
+
         # Dataset JSON
         data.append({
             "path": rel,
@@ -219,7 +219,7 @@ def build_sections(files: List[pathlib.Path]) -> Tuple[str, str, List[Dict], Dic
             "anchor": anchor,
             "last_modified": datetime.fromtimestamp(int(os.environ["SOURCE_DATE_EPOCH"]) if "SOURCE_DATE_EPOCH" in os.environ else path.stat().st_mtime, timezone.utc).isoformat(),
         })
-    
+
     return "\n".join(nav_parts), "\n".join(body_parts), data, dict(stats)
 
 
@@ -228,20 +228,20 @@ def build_html() -> str:
     print("📦 Escaneando archivos...", file=sys.stderr)
     files = files_to_include()
     print(f"   ✓ {len(files)} archivos encontrados", file=sys.stderr)
-    
+
     print("🔨 Construyendo secciones...", file=sys.stderr)
     nav_html, body_html, data, raw_stats = build_sections(files)
-    
+
     # Procesa estadísticas
     counts = {
-        cat: raw_stats.get(cat, 0) 
+        cat: raw_stats.get(cat, 0)
         for cat in ["root", "core", "reference", "playbook", "script", "eval", "result", "sample", "other"]
     }
     counts = {k: v for k, v in counts.items() if v > 0}
-    
+
     total_docs = len(data)
     total_size = raw_stats.get("total_size", 0)
-    
+
     # Genera HTML de estadísticas
     stats_html = ""
     for key in ["root", "core", "reference", "playbook", "script", "eval", "result", "sample"]:
@@ -251,7 +251,7 @@ def build_html() -> str:
   <span>{html.escape(key)}</span>
 </div>
 '''
-    
+
     # Dataset JSON embebido
     dataset = {
         "name": "ORION-HACKING",
@@ -266,15 +266,15 @@ def build_html() -> str:
         },
         "entries": data,
     }
-    
+
     dataset_json = json.dumps(
         dataset,
         ensure_ascii=False,
         indent=2,
     ).replace("<", "\\u003c").replace(">", "\\u003e")  # Escape all HTML parser delimiters
-    
+
     print(f"✓ {total_docs} documentos, {total_size:,} bytes totales", file=sys.stderr)
-    
+
     # Construye HTML final
     html_content = f"""<!doctype html>
 <html lang="es">
@@ -287,7 +287,7 @@ def build_html() -> str:
   <meta name="keywords" content="cybersecurity,pentesting,offensive security,red team,blue team,security automation">
   <meta name="theme-color" content="#b34b2e">
   <meta name="robots" content="noindex,nofollow">
-  
+
   <style>
     :root {{
       --bg: #efe8dc;
@@ -310,10 +310,10 @@ def build_html() -> str:
       --radius-lg: 22px;
       --radius-md: 16px;
     }}
-    
+
     * {{ box-sizing: border-box; }}
     html {{ scroll-behavior: smooth; }}
-    
+
     body {{
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "IBM Plex Serif", Georgia, serif;
@@ -325,7 +325,7 @@ def build_html() -> str:
       background-attachment: fixed;
       line-height: 1.6;
     }}
-    
+
     body::before {{
       content: "";
       position: fixed;
@@ -338,12 +338,12 @@ def build_html() -> str:
       mask-image: linear-gradient(180deg, rgba(0,0,0,0.16), transparent 75%);
       z-index: 0;
     }}
-    
+
     a {{ color: var(--accent); text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
     code {{ background: var(--chip); padding: 0.2em 0.4em; border-radius: 4px; font-family: "Cascadia Code", Consolas, monospace; }}
     h1, h2, h3 {{ line-height: 1.2; }}
-    
+
     .shell {{
       display: grid;
       grid-template-columns: 24rem minmax(0, 1fr);
@@ -351,7 +351,7 @@ def build_html() -> str:
       position: relative;
       z-index: 1;
     }}
-    
+
     .sidebar {{
       position: sticky;
       top: 0;
@@ -362,12 +362,12 @@ def build_html() -> str:
       backdrop-filter: blur(12px);
       padding: 1.2rem;
     }}
-    
+
     .sidebar-shell {{
       display: grid;
       gap: 1.2rem;
     }}
-    
+
     .brand {{
       padding: 1.2rem;
       border-radius: var(--radius-lg);
@@ -375,20 +375,20 @@ def build_html() -> str:
       background: linear-gradient(180deg, rgba(255,255,255,0.85), rgba(246,236,220,0.8));
       box-shadow: var(--shadow-soft);
     }}
-    
+
     .brand h1 {{
       margin: 0;
       font-size: 1.7rem;
       line-height: 0.95;
       letter-spacing: 0.02em;
     }}
-    
+
     .brand p {{
       margin: 0.55rem 0 0;
       color: var(--muted);
       font-size: 0.92rem;
     }}
-    
+
     .eyebrow {{
       display: inline-flex;
       align-items: center;
@@ -404,7 +404,7 @@ def build_html() -> str:
       text-transform: uppercase;
       font-weight: 600;
     }}
-    
+
     .sidebar-block {{
       padding: 1rem;
       border-radius: var(--radius-lg);
@@ -412,7 +412,7 @@ def build_html() -> str:
       background: var(--panel);
       box-shadow: var(--shadow-soft);
     }}
-    
+
     .sidebar-block h3 {{
       margin: 0 0 0.8rem 0;
       font-size: 0.9rem;
@@ -420,7 +420,7 @@ def build_html() -> str:
       letter-spacing: 0.08em;
       color: var(--muted);
     }}
-    
+
     .search {{
       width: 100%;
       padding: 0.8rem 1rem;
@@ -433,20 +433,20 @@ def build_html() -> str:
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.65);
       transition: all 160ms ease;
     }}
-    
+
     .search:focus {{
       outline: none;
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(179, 75, 46, 0.1);
     }}
-    
+
     .filters {{
       display: flex;
       flex-wrap: wrap;
       gap: 0.5rem;
       margin-top: 0.8rem;
     }}
-    
+
     .filter {{
       border: 1px solid var(--line);
       background: var(--panel-strong);
@@ -458,26 +458,26 @@ def build_html() -> str:
       transition: 160ms ease;
       font-size: 0.85rem;
     }}
-    
+
     .filter:hover {{
       transform: translateY(-1px);
       border-color: var(--accent);
     }}
-    
+
     .filter.active {{
       color: white;
       background: linear-gradient(180deg, var(--accent), var(--accent-deep));
       border-color: transparent;
       box-shadow: 0 8px 16px rgba(179, 75, 46, 0.2);
     }}
-    
+
     .toc {{
       display: grid;
       gap: 0.5rem;
       max-height: calc(100vh - 500px);
       overflow-y: auto;
     }}
-    
+
     .toc-link {{
       display: grid;
       gap: 0.15rem;
@@ -490,18 +490,18 @@ def build_html() -> str:
       transition: 160ms ease;
       font-size: 0.85rem;
     }}
-    
+
     .toc-link:hover {{
       background: var(--accent-soft);
       border-color: rgba(179, 75, 46, 0.2);
       transform: translateX(2px);
     }}
-    
+
     .toc-title {{
       font-weight: 500;
       color: var(--ink);
     }}
-    
+
     .toc-path {{
       color: var(--muted);
       font-size: 0.75rem;
@@ -509,24 +509,24 @@ def build_html() -> str:
       overflow: hidden;
       text-overflow: ellipsis;
     }}
-    
+
     .toc-size {{
       color: var(--muted);
       font-size: 0.7rem;
     }}
-    
+
     .main {{
       padding: 1.5rem 1.6rem 3rem;
       overflow-y: auto;
     }}
-    
+
     .main-shell {{
       max-width: 1280px;
       margin: 0 auto;
       display: grid;
       gap: 1.5rem;
     }}
-    
+
     .masthead {{
       display: flex;
       align-items: center;
@@ -535,7 +535,7 @@ def build_html() -> str:
       padding: 0.5rem 0;
       flex-wrap: wrap;
     }}
-    
+
     .masthead-copy h2 {{
       margin: 0;
       font-size: 0.9rem;
@@ -543,7 +543,7 @@ def build_html() -> str:
       text-transform: uppercase;
       color: var(--muted);
     }}
-    
+
     .masthead-badge {{
       display: inline-flex;
       align-items: center;
@@ -556,7 +556,7 @@ def build_html() -> str:
       font-size: 0.8rem;
       color: var(--muted);
     }}
-    
+
     .hero {{
       background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(252,245,235,0.88));
       border: 1px solid var(--line);
@@ -564,26 +564,26 @@ def build_html() -> str:
       border-radius: var(--radius-xl);
       padding: 2rem;
     }}
-    
+
     .hero h2 {{
       margin: 0 0 1rem 0;
       font-size: clamp(1.8rem, 4vw, 3rem);
       line-height: 1;
     }}
-    
+
     .hero p {{
       margin: 0.5rem 0 0;
       color: var(--muted);
       max-width: 65ch;
       font-size: 1rem;
     }}
-    
+
     .stats {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
       gap: 0.8rem;
     }}
-    
+
     .stat {{
       display: grid;
       gap: 0.2rem;
@@ -595,20 +595,20 @@ def build_html() -> str:
       box-shadow: var(--shadow-soft);
       text-align: center;
     }}
-    
+
     .stat strong {{
       font-size: 1.8rem;
       line-height: 1;
       color: var(--accent-deep);
     }}
-    
+
     .stat span {{
       color: var(--muted);
       font-size: 0.75rem;
       text-transform: uppercase;
       letter-spacing: 0.06em;
     }}
-    
+
     .control-bar {{
       display: flex;
       align-items: center;
@@ -621,17 +621,17 @@ def build_html() -> str:
       box-shadow: var(--shadow-soft);
       flex-wrap: wrap;
     }}
-    
+
     .control-title strong {{
       font-size: 0.95rem;
     }}
-    
+
     .control-state {{
       display: flex;
       gap: 0.5rem;
       flex-wrap: wrap;
     }}
-    
+
     .state-chip {{
       padding: 0.4rem 0.7rem;
       border-radius: 999px;
@@ -640,12 +640,12 @@ def build_html() -> str:
       font-size: 0.8rem;
       color: var(--muted);
     }}
-    
+
     .docs {{
       display: grid;
       gap: 1.2rem;
     }}
-    
+
     .doc-card {{
       position: relative;
       background: var(--panel);
@@ -655,12 +655,12 @@ def build_html() -> str:
       overflow: hidden;
       transition: transform 160ms ease, box-shadow 160ms ease;
     }}
-    
+
     .doc-card:hover {{
       transform: translateY(-2px);
       box-shadow: 0 24px 60px rgba(45, 29, 16, 0.12);
     }}
-    
+
     .doc-card::before {{
       content: "";
       position: absolute;
@@ -668,12 +668,12 @@ def build_html() -> str:
       width: 3px;
       background: linear-gradient(180deg, var(--accent), rgba(36, 115, 122, 0.6));
     }}
-    
+
     .doc-header {{
       padding: 1.2rem 1.3rem 0.8rem 1.4rem;
       border-bottom: 1px solid var(--line);
     }}
-    
+
     .doc-meta {{
       display: flex;
       align-items: center;
@@ -681,7 +681,7 @@ def build_html() -> str:
       flex-wrap: wrap;
       margin-bottom: 0.6rem;
     }}
-    
+
     .pill {{
       background: var(--accent-soft);
       color: var(--accent-deep);
@@ -693,36 +693,36 @@ def build_html() -> str:
       letter-spacing: 0.06em;
       font-weight: 600;
     }}
-    
+
     .doc-extension, .doc-size {{
       color: var(--muted);
       font-size: 0.78rem;
     }}
-    
+
     .doc-header h2 {{
       margin: 0 0 0.3rem 0;
       font-size: 1.15rem;
       line-height: 1.25;
     }}
-    
+
     .doc-path {{
       margin: 0;
       color: var(--muted);
       font-size: 0.8rem;
       font-family: monospace;
     }}
-    
+
     .doc-summary {{
       margin: 0.4rem 0 0 0;
       color: var(--muted);
       font-size: 0.88rem;
       line-height: 1.4;
     }}
-    
+
     .doc-content {{
       padding: 0;
     }}
-    
+
     .doc-content pre {{
       margin: 0;
       padding: 1rem 1.3rem 1.2rem 1.4rem;
@@ -735,21 +735,21 @@ def build_html() -> str:
       font-size: 0.8rem;
       line-height: 1.6;
     }}
-    
+
     .doc-content code {{
       background: transparent;
       padding: 0;
     }}
-    
+
     .hidden {{
       display: none !important;
     }}
-    
+
     ::selection {{
       background: rgba(179, 75, 46, 0.2);
       color: var(--ink);
     }}
-    
+
     .info-box {{
       padding: 1rem;
       border-left: 4px solid var(--accent);
@@ -758,12 +758,12 @@ def build_html() -> str:
       margin: 1rem 0;
       font-size: 0.9rem;
     }}
-    
+
     @media (max-width: 1024px) {{
       .shell {{
         grid-template-columns: 1fr;
       }}
-      
+
       .sidebar {{
         position: static;
         height: auto;
@@ -771,25 +771,25 @@ def build_html() -> str:
         border-bottom: 1px solid var(--line);
       }}
     }}
-    
+
     @media (max-width: 640px) {{
       .masthead {{
         flex-direction: column;
         align-items: flex-start;
       }}
-      
+
       .main {{
         padding: 1rem;
       }}
-      
+
       .sidebar {{
         padding: 1rem;
       }}
-      
+
       .hero {{
         padding: 1.5rem;
       }}
-      
+
       .doc-card pre {{
         max-height: 250px;
         font-size: 0.75rem;
@@ -806,7 +806,7 @@ def build_html() -> str:
           <h1>ORION-HACKING</h1>
           <p>Base de conocimientos integrada para flujos de ciberseguridad autorizada y automatización segura.</p>
         </div>
-        
+
         <div class="sidebar-block">
           <input id="search" class="search" type="search" placeholder="Buscar documentos...">
           <div class="filters" id="filters">
@@ -818,7 +818,7 @@ def build_html() -> str:
             <button class="filter" data-filter="script">Scripts</button>
           </div>
         </div>
-        
+
         <div class="sidebar-block">
           <h3>Documentos</h3>
           <nav class="toc" id="toc">
@@ -827,7 +827,7 @@ def build_html() -> str:
         </div>
       </div>
     </aside>
-    
+
     <main class="main">
       <div class="main-shell">
         <section class="masthead">
@@ -836,7 +836,7 @@ def build_html() -> str:
           </div>
           <div class="masthead-badge">JSON embebido · Sin dependencias externas</div>
         </section>
-        
+
         <section class="hero">
           <h2>ORION-HACKING Singlefile</h2>
           <p>Página HTML autónoma que contiene la base de conocimientos completa con búsqueda en el cliente, filtrado interactivo y dataset JSON embebido para scraping por agentes IA. No requiere conexión de red ni servidor externo.</p>
@@ -844,7 +844,7 @@ def build_html() -> str:
             <strong>Características:</strong> Texto completo consultable, navegación por categoría, responsivo, accesible, datos legibles por máquina.
           </div>
         </section>
-        
+
         <section class="stats" aria-label="Estadísticas del dataset">
           <div class="stat">
             <strong>{total_docs}</strong>
@@ -852,7 +852,7 @@ def build_html() -> str:
           </div>
           {stats_html}
         </section>
-        
+
         <section class="control-bar">
           <strong>Estado Vivo:</strong>
           <div class="control-state">
@@ -860,7 +860,7 @@ def build_html() -> str:
             <span class="state-chip" id="active-filter">filtro: todos</span>
           </div>
         </section>
-        
+
         <section class="docs" id="docs">
           {body_html}
         </section>
@@ -871,11 +871,11 @@ def build_html() -> str:
   <script id="orion-dataset" type="application/json">
 {dataset_json}
   </script>
-  
+
   <script>
     (function() {{
       'use strict';
-      
+
       const search = document.getElementById('search') || null;
       const filters = Array.from(document.querySelectorAll('.filter'));
       const cards = Array.from(document.querySelectorAll('.doc-card'));
@@ -890,24 +890,24 @@ def build_html() -> str:
       function applyFilters() {{
         const query = (search?.value || '').trim().toLowerCase();
         let shown = 0;
-        
+
         cards.forEach(card => {{
           const cardHaystack = consultable.get(card) || '';
 
           const categoryOk = activeFilter === 'all' || card.dataset.category === activeFilter;
           const queryOk = !query || cardHaystack.includes(query);
           const show = categoryOk && queryOk;
-          
+
           card.classList.toggle('hidden', !show);
           if (show) shown += 1;
         }});
-        
+
         tocLinks.forEach(link => {{
           const target = document.querySelector(link.getAttribute('href'));
           const shouldHideToc = !target || target.classList.contains('hidden');
           link.classList.toggle('hidden', shouldHideToc);
         }});
-        
+
         if (visibleCount) {{
           visibleCount.textContent = `${{shown}} visible${{shown !== 1 ? 's' : ''}}`;
         }}
@@ -938,14 +938,14 @@ def build_html() -> str:
           }}
         }});
       }}
-      
+
       applyFilters();
     }})();
   </script>
 </body>
 </html>
 """
-    
+
     return html_content
 
 
@@ -953,20 +953,20 @@ def main() -> int:
     """Construye y escribe archivos HTML."""
     print("🏗️  ORION-HACKING Single-File Builder", file=sys.stderr)
     print("=" * 50, file=sys.stderr)
-    
+
     try:
         html_content = build_html()
-        
+
         print("📝 Escribiendo archivos de salida...", file=sys.stderr)
         for out_path in OUT_PATHS:
             out_path.write_text(html_content, encoding="utf-8")
             size_mb = out_path.stat().st_size / (1024 * 1024)
             print(f"   ✓ {out_path.name} ({size_mb:.2f} MB)", file=sys.stderr)
-        
+
         print("=" * 50, file=sys.stderr)
         print("✅ Build completado exitosamente", file=sys.stderr)
         return 0
-    
+
     except Exception as e:
         print(f"❌ Error durante build: {e}", file=sys.stderr)
         return 1

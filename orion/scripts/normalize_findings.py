@@ -13,6 +13,8 @@ import sys
 from collections import Counter
 from typing import Any
 
+from orion.jsonio import read_json
+
 MAX_INPUT_BYTES = 1024 * 1024
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 SEVERITY_ALIASES = {
@@ -119,25 +121,9 @@ def normalize_finding(raw_finding: Any) -> dict[str, Any] | None:
     return normalized
 
 
-def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    output: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in output:
-            raise ValueError(f"duplicate JSON key: {key}")
-        output[key] = value
-    return output
-
-
-def _reject_constant(value: str) -> None:
-    raise ValueError(f"non-finite number: {value}")
-
-
 def main() -> int:
     try:
-        raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-        if len(raw) > MAX_INPUT_BYTES:
-            raise ValueError("input exceeds 1 MiB")
-        data = json.loads(raw, object_pairs_hook=_unique_keys, parse_constant=_reject_constant)
+        data = read_json(sys.stdin.buffer, max_bytes=MAX_INPUT_BYTES)
         if not isinstance(data, (dict, list)):
             raise ValueError("input must be an object or a list of objects")
         rows = data if isinstance(data, list) else [data]

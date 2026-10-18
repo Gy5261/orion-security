@@ -10,6 +10,7 @@ import argparse
 import ipaddress
 import json
 import math
+import re
 import sys
 import time
 import urllib.error
@@ -18,6 +19,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Mapping
+
+from orion.jsonio import read_json_file
 
 MAX_BODY_BYTES = 1024 * 1024
 MAX_TARGETS = 16
@@ -80,12 +83,16 @@ def fetch_with_retry(url: str, max_retries: int = 2, timeout: float = DEFAULT_TI
 def _normalize_headers(raw: Mapping[str, Any]) -> dict[str, str]:
     result: dict[str, str] = {}
     for name, value in raw.items():
-        if not isinstance(name, str) or not isinstance(value, str) or "\n" in name or "\r" in name:
+        if not isinstance(name, str) or not isinstance(value, str):
             raise ValueError("header names and values must be strings without invalid name controls")
         if len(name) > 256 or len(value) > 4096:
             raise ValueError("header exceeds size limit")
-        if not name:
-            raise ValueError("empty header name")
+        if not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name):
+            raise ValueError("invalid HTTP header name")
+        if any(ord(char) < 32 and char != "\t" or ord(char) == 127 for char in value):
+            raise ValueError("invalid HTTP header value")
+        if name.casefold() in result:
+            raise ValueError("duplicate HTTP header name")
         result[name.casefold()] = value
     return result
 
@@ -138,10 +145,7 @@ def classify_risk_level(score: float) -> str:
 
 
 def _read_offline(path: Path) -> list[dict[str, Any]]:
-    if path.stat().st_size > MAX_BODY_BYTES:
-        raise ValueError("saved response JSON exceeds 1 MiB")
-    with path.open("rb") as handle:
-        data = json.load(handle)
+    data = read_json_file(path, max_bytes=MAX_BODY_BYTES)
     if isinstance(data, dict):
         data = [data]
     if not isinstance(data, list) or not 1 <= len(data) <= MAX_TARGETS:
@@ -150,7 +154,12 @@ def _read_offline(path: Path) -> list[dict[str, Any]]:
     for index, item in enumerate(data):
         if not isinstance(item, dict) or not isinstance(item.get("headers"), dict):
             raise ValueError(f"snapshot[{index}] requires a headers object")
-        url = str(item.get("url", "offline://saved-response"))
+        url = item.get("url", "offline://saved-response")
+        if not isinstance(url, str) or len(url) > 2048:
+            raise ValueError(f"snapshot[{index}] requires a bounded URL string")
+        status = item.get("status")
+        if status is not None and (type(status) is not int or not 100 <= status <= 599):
+            raise ValueError(f"snapshot[{index}] has invalid HTTP status")
         scheme = urllib.parse.urlsplit(url).scheme
         if scheme not in {"http", "https", "offline"}:
             raise ValueError(f"snapshot[{index}] has unsupported URL scheme")

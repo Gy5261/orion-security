@@ -1,128 +1,55 @@
-# ORION 2.0 Plugin System
+# Contratos y runtime de plugins
 
-> **Alcance vigente:** las referencias históricas a integración online o tickets remotos son descripciones de adaptadores, no permisos efectivos. En el perfil actual sólo la clasificación IOC local, la planificación de tickets y el TLS de laboratorio con aprobación exacta tienen rutas admitidas. Consultar [capacidades verificadas](VERIFIED_CAPABILITIES.md) y [operación controlada](CONTROLLED_OPERATION.md).
+## Registro e interfaces
 
+ORION mantiene nueve plugins incorporados y el grupo de entry points `orion.plugins`. La instalación no necesita las herramientas externas. `PluginRegistry(load_external=False)` es el valor predeterminado; descubrir extensiones Python requiere una decisión explícita del integrador local.
 
-ORION converts security capabilities into typed, discoverable, auditable plugins. The runtime is the source of truth for CLI, MCP, manifests, tests, and external integrations.
-
-## Architecture
-
-```text
-orion/
-├── cli.py                  # CLI
-├── resources.py            # read-only MCP resource catalog
-├── mcp/server.py           # FastMCP server
-├── plugins/
-│   ├── core.py             # contracts, policy, registry, runtime
-│   ├── adapters.py         # hardened subprocess adapters
-│   ├── builtin.py          # native plugins
-│   └── osint.py            # external OSINT integrations
-└── scripts/                # existing native engines
+```bash
+orion plugins list --json
+orion plugins describe ioc_enricher --health
+orion plugins doctor
 ```
 
-## Stable contract
+`doctor` informa herramientas opcionales ausentes sin fallar la instalación. `--strict` permite que un operador exija todas las dependencias. La disponibilidad de un binario o URL configurada no prueba conectividad ni autorización.
 
-Every plugin implements `BasePlugin`, publishes immutable `PluginMetadata`, exposes `health()`, and returns JSON-compatible data.
+## Ejecución desde Python
 
 ```python
-from orion.plugins import BasePlugin, PluginContext, PluginMetadata
+from orion.plugins.core import OrionRuntime, PluginContext
 
-
-class ExamplePlugin(BasePlugin):
-    metadata = PluginMetadata(
-        plugin_id="example_plugin",
-        name="Example Plugin",
-        version="1.0.0",
-        category="defensive",
-        description="Read-only authorized defensive example.",
-        risk_level="low",
-        capabilities=("example",),
-        input_schema={"type": "object"},
-        output_schema={"type": "object"},
-    )
-
-    def run(self, payload: dict, context: PluginContext) -> dict:
-        return {"ok": True}
+result = OrionRuntime().execute(
+    "ioc_enricher",
+    {"iocs": ["198.51.100.4", "example.invalid"], "external_sources": False},
+    PluginContext(authorization="OFFLINE-REVIEW-001"),
+    timeout_seconds=10,
+)
+print(result.to_dict())
 ```
 
-Metadata declares authorization, network access, request-specific side effects, timeouts, schemas, tags, integration type, homepage, and license.
+El runtime valida JSON, copia el payload, comprueba el esquema y evalúa la política antes de ejecutar. Los plugins incorporados aplican también esa política cuando se llama a `.run()` directamente; una admisión del runtime no se reutiliza para otro plugin y no consume dos veces la cuota TLS. Red, efectos externos y autorización se derivan de la operación concreta; la presencia de una clave o de una etiqueta en el manifiesto no evita los controles.
 
-## Execution policy
+## JSON Schema soportado
 
-The runtime validates, in order:
+El validador del runtime implementa el subconjunto de JSON Schema que declara el proyecto: tipos, propiedades requeridas, propiedades adicionales, longitudes, cantidades, patrones, límites numéricos, const/enum y combinaciones admitidas. No es un intérprete de todos los vocabularios de JSON Schema. No descarga esquemas remotos. Las assertions no implementadas, como `$ref` o `format`, se rechazan explícitamente, incluso en ramas alternativas.
 
-1. plugin identifier;
-2. input schema;
-3. authorization reference;
-4. network permission;
-5. request-specific side-effect permission;
-6. optional dependency health;
-7. output schema;
-8. normalized result metadata.
+La igualdad JSON distingue booleanos de números y reconoce equivalencia numérica para `uniqueItems`. Incluso los nodos sin un esquema detallado deben ser JSON válido y acotado. El validador del repositorio usa además Draft 2020-12 para comprobar los documentos de esquema publicados.
 
-Every result contains plugin ID and version, request UUID, actor, duration, warnings, data, or a structured error.
+## Tiempo, cancelación y resultados
 
-## External tools
+`timeout_seconds` comparte un deadline con los adaptadores y tareas paralelas. Una ejecución que supera el plazo no produce un resultado exitoso tardío. `ExecutionCancellation` permite señalizar cancelación desde otra hebra; los motores deben alcanzar un punto de control.
 
-External projects are not copied into ORION. Adapters resolve trusted local executables, use `shell=False`, reject arbitrary arguments, bound execution time and output, isolate artifacts in temporary directories, and expose missing dependencies through health checks.
+Los procesos externos aplican su deadline mientras esperan; se limpian en retorno normal, excepción, interrupción y cancelación. El código Python arbitrario sigue siendo confiable: la cancelación cooperativa no lo interrumpe por la fuerza.
 
-Supported adapters:
+Los resultados conservan `plugin_id`, `plugin_version`, `request_id`, `actor`, `ok`, `duration_ms`, `data`, `warnings` y `error`. Los consumidores deben comprobar `ok` y el estado de cada elemento cuando un motor produce resultados parciales.
 
-- SpiderFoot;
-- theHarvester;
-- Sherlock;
-- OSINT-SPY;
-- PhoneInfoga;
-- Photon.
+## Adaptadores
 
-See [OSINT integrations](OSINT_INTEGRATIONS.md).
+Las entradas se convierten en una lista de argumentos validada; nunca se concatenan para una shell. La configuración de ejecutables corresponde al operador, no al payload. Se filtran variables de inyección de intérpretes/cargadores y se usan directorios temporales para ejecución y artefactos.
 
-## CLI
+La captura de stdout/stderr y la recopilación de archivos están acotadas. Se rechazan enlaces, archivos especiales, JSON ambiguo y argumentos interpretables como opciones no permitidas. La redacción de secretos es defensa adicional; no convierte la salida de una herramienta en dato publicable automáticamente.
 
-```bash
-orion plugins list --health
-orion plugins describe photon --health
-orion plugins doctor
-orion plugins doctor --strict
-orion plugins export-manifest --output skills/skills.json
-```
+## Cambios de contrato
 
-```bash
-orion plugins run photon \
-  --input samples/plugins/photon.json \
-  --authorization TOR-2026-ORION-001 \
-  --allow-network
-```
+El manifiesto estático `skills/skills.json` se genera desde el registro y utiliza `python_runtime: "not_recorded_static_catalog"`. `python tools/validate_repository.py` compara metadata, esquemas, permisos, versiones y entry points. Un cambio debe actualizar el catálogo y sus pruebas en la misma revisión.
 
-The default doctor treats missing third-party executables as optional. `--strict` requires every integration to be installed.
-
-## MCP
-
-The MCP server exposes plugin discovery, health, execution, repository search, manifests, plugin resources, and bounded read-only access to repository text resources.
-
-```bash
-python -m pip install -e ".[mcp]"
-orion-mcp
-```
-
-See [MCP server](MCP_SERVER.md).
-
-## Quality gate
-
-```bash
-python tools/validate_repository.py
-python -m pytest
-orion plugins doctor
-python -m build
-```
-
-The validator checks the exact plugin set, authorization metadata, subprocess policy, static/runtime manifest synchronization, and resource path isolation.
-
-## Compatibility
-
-- Python 3.10–3.13;
-- no mandatory third-party runtime dependencies;
-- optional MCP dependency;
-- JSON-first interfaces;
-- standard Python entry points;
-- source checkout, editable installation, wheel, containers, and MCP clients.
+Mantenga APIs públicas dentro de la versión mayor. El rechazo de coerciones, traversal y entradas ambiguas es parte de la corrección de seguridad de 2.1.1. Consulte [arquitectura](../orion/ARCHITECTURE.md) y [operación controlada](CONTROLLED_OPERATION.md).

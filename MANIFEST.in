@@ -1,0 +1,9 @@
+include AGENTS.md LICENSE README.md pyproject.toml requirements.txt
+recursive-include docs *.md *.json
+recursive-include schemas *.json
+recursive-include skills *.json *.md
+recursive-include samples *.json *.md
+recursive-include tests *.py
+recursive-include tools *.py
+recursive-include .github *.yml *.py
+global-exclude __pycache__ *.py[cod] .env .env.* *.sqlite* *.db *.pem *.key

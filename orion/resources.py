@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import base64
+import builtins
 import mimetypes
 import os
 import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import quote
+
+from orion.fileio import is_link, open_regular
 
 from orion.plugins.core import JsonObject, PluginRegistry, dumps_json
 
@@ -17,6 +21,9 @@ _BINARY_SUFFIXES = {".gif", ".jpeg", ".jpg", ".mp3", ".ogg", ".pdf", ".png", ".w
 _ALLOWED_SUFFIXES = _TEXT_SUFFIXES | _BINARY_SUFFIXES
 _EXCLUDED_PARTS = {"__pycache__", "build", "dist", "node_modules", "evidence", "engagements", "audit", "private"}
 _EXCLUDED_NAMES = {"credentials.json", "secrets.json", "approval.json", "lab-approval.json"}
+_MAX_TRAVERSAL_ENTRIES = 10_000
+_MAX_TRAVERSAL_DEPTH = 32
+_MAX_SEARCH_BYTES = 32 * 1024 * 1024
 _DEFAULT_MAX_RESOURCE_BYTES = 2 * 1024 * 1024
 
 
@@ -55,9 +62,6 @@ class ResourceCatalog:
         source_root = Path(__file__).resolve().parents[1]
         if (source_root / "pyproject.toml").is_file():
             return source_root
-        working_root = Path.cwd().resolve()
-        if (working_root / "orion").is_dir() and (working_root / "README.md").is_file():
-            return working_root
         return Path(__file__).resolve().parent
 
     @staticmethod
@@ -80,15 +84,17 @@ class ResourceCatalog:
         return True
 
     def _resolve(self, relative_path: str) -> Path:
-        if not isinstance(relative_path, str) or not relative_path or "\x00" in relative_path:
+        if not isinstance(relative_path, str) or not relative_path or any(ord(char) < 32 or ord(char) == 127 for char in relative_path):
             raise ValueError("resource path must be a nonempty relative path")
         relative = Path(relative_path)
+        if any(part in {"", ".", ".."} for part in relative_path.split("/")) or ":" in relative_path:
+            raise ValueError("resource path is not canonical")
         if relative.is_absolute() or ".." in relative.parts or "\\" in relative_path:
             raise ValueError("resource path escapes repository root or is not canonical")
         candidate = self.root / relative
         cursor = candidate
         while cursor != self.root:
-            if cursor.is_symlink():
+            if is_link(cursor):
                 raise ValueError("symbolic links are not published resources")
             cursor = cursor.parent
         resolved = candidate.resolve()
@@ -105,26 +111,43 @@ class ResourceCatalog:
         info = path.stat()
         if not stat.S_ISREG(info.st_mode) or info.st_size > self.max_resource_bytes:
             raise ValueError("resource is not a bounded regular file")
+        if info.st_nlink != 1:
+            raise ValueError("hard-linked files are not published resources")
         relative = path.relative_to(self.root).as_posix()
-        return ResourceDescriptor(uri=f"orion://repository/{relative}", path=relative, name=path.name,
+        return ResourceDescriptor(uri=f"orion://repository/{quote(relative, safe='/')}", path=relative, name=path.name,
                                   media_type=self._media_type(path), size_bytes=info.st_size,
                                   binary=path.suffix.lower() in _BINARY_SUFFIXES)
 
     def _iter_files(self) -> Iterable[Path]:
-        count = 0
-        for current, directories, filenames in os.walk(self.root, followlinks=False):
-            directories[:] = sorted(name for name in directories if not self._excluded_part(name)
-                                    and not (Path(current) / name).is_symlink())
-            for name in sorted(filenames):
-                if count >= 5000:
-                    return
-                path = Path(current) / name
+        # Bound *visited entries*, including excluded files and empty directories.
+        # os.walk + sorted can otherwise allocate the full contents of a huge tree.
+        pending = [(self.root, 0)]
+        visited = 0
+        while pending:
+            current, depth = pending.pop()
+            with os.scandir(current) as scan:
+                entries = []
+                for entry in scan:
+                    visited += 1
+                    if visited > _MAX_TRAVERSAL_ENTRIES:
+                        raise ValueError("resource traversal entry budget exceeded")
+                    entries.append(entry)
+            directories = []
+            for entry in sorted(entries, key=lambda item: item.name):
+                path = Path(entry.path)
+                if self._excluded_part(entry.name) or is_link(path):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    if depth >= _MAX_TRAVERSAL_DEPTH:
+                        raise ValueError("resource traversal depth budget exceeded")
+                    directories.append((path, depth + 1))
+                    continue
                 try:
                     descriptor = self.descriptor(path.relative_to(self.root).as_posix())
                 except (OSError, ValueError):
                     continue
-                count += 1
                 yield self.root / descriptor.path
+            pending.extend(reversed(directories))
 
     def list(self) -> tuple[ResourceDescriptor, ...]:
         descriptors = []
@@ -135,15 +158,15 @@ class ResourceCatalog:
                 continue
         return tuple(sorted(descriptors, key=lambda item: item.path))
 
-    def read_bytes(self, relative_path: str) -> bytes:
+    def read_bytes(self, relative_path: str, *, max_bytes: int | None = None) -> bytes:
+        limit = self.max_resource_bytes if max_bytes is None else min(max_bytes, self.max_resource_bytes)
+        if type(limit) is not int or limit < 1:
+            raise ValueError("resource read-byte limit must be positive")
         descriptor = self.descriptor(relative_path)
         path = self._resolve(descriptor.path)
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-        with os.fdopen(os.open(path, flags), "rb") as handle:
-            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-                raise ValueError("resource changed to a non-regular file")
-            data = handle.read(self.max_resource_bytes + 1)
-        if len(data) > self.max_resource_bytes:
+        with open_regular(path, single_link=True) as handle:
+            data = handle.read(limit + 1)
+        if len(data) > limit:
             raise ValueError("resource exceeds the actual read-byte limit")
         return data
 
@@ -166,7 +189,7 @@ class ResourceCatalog:
             result["text"] = data.decode("utf-8", errors="replace")
         return result
 
-    def search(self, query: str, limit: int = 20) -> list[JsonObject]:
+    def search(self, query: str, limit: int = 20) -> builtins.list[JsonObject]:
         """Rank literal matches without unbounded repository scans or network use.
 
         This is bounded lexical retrieval, not semantic search. The scanning budget
@@ -178,8 +201,8 @@ class ResourceCatalog:
             raise ValueError("search limit must be an integer from 1 to 100")
         normalized = query.strip().casefold()
         scanned_bytes = 0
-        scanned_budget = 32 * 1024 * 1024
-        ranked: list[tuple[int, JsonObject]] = []
+        scanned_budget = _MAX_SEARCH_BYTES
+        ranked: builtins.list[tuple[int, JsonObject]] = []
         for descriptor in self.list():
             path_name = descriptor.path.casefold()
             path_match = normalized in path_name
@@ -190,11 +213,19 @@ class ResourceCatalog:
                 continue
             if scanned_bytes + descriptor.size_bytes > scanned_budget:
                 break
-            scanned_bytes += descriptor.size_bytes
+            # Reserve the complete bounded read, including the overflow sentinel.
+            # A failed read may already have consumed bytes; charge that reservation
+            # on failure instead of repeatedly spending the same remaining budget.
+            reserved_bytes = min(self.max_resource_bytes + 1, scanned_budget - scanned_bytes)
+            if reserved_bytes < 2:
+                break
+            scanned_bytes += reserved_bytes
             try:
-                content = self.read(descriptor.path)
+                data = self.read_bytes(descriptor.path, max_bytes=reserved_bytes - 1)
             except (OSError, UnicodeError, ValueError):
                 continue
+            scanned_bytes -= reserved_bytes - len(data)
+            content = data.decode("utf-8", errors="replace")
             folded = content.casefold()
             position = folded.find(normalized)
             if not path_match and position < 0:
@@ -210,7 +241,7 @@ class ResourceCatalog:
 
     def index(self) -> JsonObject:
         registry = PluginRegistry(load_external=False)
-        return {"project": "ORION-HACKING-ETICO-Y-CIBERSEGURIDAD", "manifest_uri": "orion://manifest",
+        return {"project": "orion-security", "manifest_uri": "orion://manifest",
                 "mcp_capabilities_uri": "orion://mcp/capabilities", "plugin_count": len(registry.list()),
                 "plugins": [{"plugin_id": item.metadata.plugin_id,
                              "resource_uri": f"orion://plugins/{item.metadata.plugin_id}"} for item in registry.list()],

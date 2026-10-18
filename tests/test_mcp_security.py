@@ -4,12 +4,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import httpx
 import pytest
 
 from orion.mcp.compat import McpServerConfig
 from orion.mcp.security import LocalHttpGuard, protocol_audit, require_local_configuration
 from orion.mcp.server import build_server, main
+
+httpx = pytest.importorskip("httpx")
 
 
 async def application(scope: Any, receive: Any, send: Any) -> None:
@@ -101,3 +102,130 @@ def test_protocol_revision_is_not_invented() -> None:
     assert result["requested_specification"] == "2026-07-28"
     assert result["conforms_to_2026_07_28"] is False
     assert result["remote_oauth_implemented"] is False
+
+
+def framed_request(*, method: str = "POST", headers: list[tuple[bytes, bytes]] | None = None,
+                   frames: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    async def scenario() -> list[dict[str, Any]]:
+        responses: list[dict[str, Any]] = []
+        incoming = list(frames if frames is not None else [{"type": "http.request", "body": b"{}"}])
+
+        async def receive() -> dict[str, Any]:
+            return incoming.pop(0)
+
+        async def send(message: dict[str, Any]) -> None:
+            responses.append(message)
+
+        guard = LocalHttpGuard(application, McpServerConfig(transport="streamable-http"))
+        await guard({"type": "http", "method": method,
+                     "headers": [(b"host", b"127.0.0.1:8000"), *(headers or [])]}, receive, send)
+        return responses
+
+    return asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("length", [b"1", b"3", b"0", b"+2", b"1" * 5000])
+def test_content_length_is_bounded_and_matches_the_received_body(length: bytes) -> None:
+    result = framed_request(headers=[(b"content-length", length)])
+    assert result[0]["status"] == 400
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE", "OPTIONS"])
+def test_undeclared_body_is_rejected_for_bodyless_methods(method: str) -> None:
+    assert framed_request(method=method)[0]["status"] == 400
+
+
+@pytest.mark.parametrize("name", [b"mcp-session-id", b"mcp-protocol-version", b"content-type",
+                                  b"last-event-id", b"authorization"])
+def test_protocol_security_headers_cannot_be_duplicated(name: bytes) -> None:
+    assert framed_request(headers=[(name, b"first"), (name.upper(), b"second")])[0]["status"] == 400
+
+
+def test_http_header_budget_is_enforced_before_application_dispatch() -> None:
+    assert framed_request(headers=[(b"x-padding", b"x" * 32769)])[0]["status"] == 431
+    assert framed_request(headers=[(b"x", b"y")] * 129)[0]["status"] == 431
+
+
+def test_header_control_characters_fail_closed() -> None:
+    assert framed_request(headers=[(b"x-test", b"first\r\nsecond")])[0]["status"] == 400
+
+
+def test_client_disconnect_does_not_dispatch_or_write_a_response() -> None:
+    assert framed_request(frames=[{"type": "http.disconnect"}]) == []
+
+
+def test_unexpected_asgi_frames_are_not_treated_as_empty_request_bodies() -> None:
+    assert framed_request(frames=[{"type": "lifespan.startup"}])[0]["status"] == 400
+
+
+def test_endless_empty_chunks_are_bounded() -> None:
+    frames = [{"type": "http.request", "body": b"", "more_body": True}] * 4097
+    assert framed_request(frames=frames)[0]["status"] == 413
+
+
+def test_body_deadline_is_enforced_without_waiting_for_client_completion() -> None:
+    async def scenario() -> None:
+        responses: list[dict[str, Any]] = []
+
+        async def receive() -> dict[str, Any]:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        async def send(message: dict[str, Any]) -> None:
+            responses.append(message)
+
+        guard = LocalHttpGuard(application, McpServerConfig(transport="streamable-http"), body_timeout_seconds=0.01)
+        await guard({"type": "http", "method": "POST", "headers": [(b"host", b"127.0.0.1:8000")]}, receive, send)
+        assert responses[0]["status"] == 408
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("size", [0, -1, True, 1.5, 16 * 1024 * 1024 + 1])
+def test_invalid_http_body_budgets_are_rejected(size: Any) -> None:
+    with pytest.raises(ValueError, match="max_body_bytes"):
+        LocalHttpGuard(application, McpServerConfig(), max_body_bytes=size)
+
+
+@pytest.mark.parametrize("origin", ["https://client.example:", "http://client.example:0", "https://*.example",
+                                   "https://client.example%2fother", "https://client.example\x7f"])
+def test_ambiguous_origin_authorities_are_rejected(origin: str) -> None:
+    with pytest.raises(ValueError):
+        require_local_configuration(McpServerConfig(transport="streamable-http", cors_origins=(origin,)))
+
+
+@pytest.mark.parametrize("body", [b'{"id":1,"id":2}', b'{"value":NaN}', b'{"value":1e999}',
+                                 b'{"value":"\xff"}', b"[" * 100 + b"0" + b"]" * 100])
+def test_mcp_json_framing_rejects_ambiguous_or_non_finite_documents(body: bytes) -> None:
+    async def scenario() -> None:
+        guard = LocalHttpGuard(application, McpServerConfig(transport="streamable-http"), strict_json=True)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=guard), base_url="http://127.0.0.1:8000") as client:
+            response = await client.post("/mcp", content=body)
+            assert response.status_code == 400
+
+    asyncio.run(scenario())
+
+
+def test_http_admission_bounds_buffers_and_releases_slots_after_completion() -> None:
+    async def scenario() -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked(scope: Any, receive: Any, send: Any) -> None:
+            started.set()
+            await release.wait()
+            await application(scope, receive, send)
+
+        guard = LocalHttpGuard(blocked, McpServerConfig(transport="streamable-http"), max_concurrent_requests=1)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=guard), base_url="http://127.0.0.1:8000") as client:
+            first = asyncio.create_task(client.post("/mcp", content=b"{}"))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            try:
+                second = await client.post("/mcp", content=b"{}")
+                assert second.status_code == 503
+            finally:
+                release.set()
+                assert (await first).status_code == 200
+            assert (await client.post("/mcp", content=b"{}")).status_code == 200
+
+    asyncio.run(scenario())

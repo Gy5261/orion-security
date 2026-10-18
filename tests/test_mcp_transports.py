@@ -12,6 +12,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+pytest.importorskip("mcp")
+
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client

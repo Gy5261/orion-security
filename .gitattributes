@@ -1,0 +1,3 @@
+# Generated HTML embeds source text, including intentional Markdown hard breaks.
+# Review the source files; preserve their literal whitespace in the export.
+orion/ORION-HACKING-singlefile.html linguist-generated=true -whitespace

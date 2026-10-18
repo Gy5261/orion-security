@@ -6,6 +6,7 @@ executables or a configured SpiderFoot service with bounded, structured input.
 
 from __future__ import annotations
 
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,6 +22,7 @@ from .adapters import (
     parse_json_output,
 )
 from .core import BasePlugin, JsonObject, PluginContext, PluginHealth, PluginMetadata
+from .execution import check_execution, execution_scope, remaining_timeout
 
 _GENERIC_OUTPUT_SCHEMA: JsonObject = {
     "type": "object",
@@ -38,6 +40,34 @@ def _timeout(payload: Mapping[str, Any], default: float = 120.0) -> float:
     return float(payload.get("timeout_seconds", default))
 
 
+def _argument_value(value: str, label: str) -> str:
+    """Reject data that an external argparse/Cobra parser may interpret as flags."""
+    if (not value or value != value.strip() or value.startswith("-")
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+        raise ValueError(f"{label} must be nonempty data without option prefixes or control characters")
+    return value
+
+
+def _domain(value: str) -> str:
+    _argument_value(value, "domain")
+    labels = value.removesuffix(".").split(".")
+    if any(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) is None for label in labels):
+        raise ValueError("domain must contain valid DNS labels")
+    return value
+
+
+def _web_url(value: str) -> str:
+    _argument_value(value, "url")
+    parsed = urllib.parse.urlsplit(value)
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or any(char.isspace() for char in value)):
+        raise ValueError("url must be an HTTP(S) URL without embedded credentials or whitespace")
+    if parsed.port is not None and not 1 <= parsed.port <= 65535:
+        raise ValueError("url port must be between 1 and 65535")
+    return value
+
+
 def _execution_result(tool_id: str, execution: JsonObject, artifacts: JsonObject | None = None) -> JsonObject:
     parsed = parse_json_output(str(execution.get("stdout", "")))
     result: JsonObject = {
@@ -47,6 +77,8 @@ def _execution_result(tool_id: str, execution: JsonObject, artifacts: JsonObject
             "return_code": execution["return_code"],
             "duration_ms": execution["duration_ms"],
             "stderr": execution.get("stderr", ""),
+            "stdout_truncated": execution.get("stdout_truncated", False),
+            "stderr_truncated": execution.get("stderr_truncated", False),
         },
     }
     if artifacts:
@@ -117,10 +149,16 @@ class SpiderFootPlugin(BasePlugin):
         return payload.get("operation") == "start"
 
     def run(self, payload: JsonObject, context: PluginContext) -> JsonObject:
-        del context
+        payload = self.authorize(payload, context)
         operation = str(payload["operation"])
         server = str(payload.get("server_url", "http://127.0.0.1:5001")).rstrip("/")
         self._validate_local_service(server)
+        parsed_server = urllib.parse.urlsplit(server)
+        if parsed_server.hostname == "localhost":
+            port = f":{parsed_server.port}" if parsed_server.port is not None else ""
+            # An OS hosts/DNS configuration must never redirect localhost to a
+            # remote service. HTTPS still performs normal certificate checks.
+            server = f"{parsed_server.scheme}://127.0.0.1{port}"
         timeout = _timeout(payload, 60)
 
         if operation == "start":
@@ -150,10 +188,13 @@ class SpiderFootPlugin(BasePlugin):
     @staticmethod
     def _validate_local_service(server: str) -> None:
         """Only an explicit local SpiderFoot service; never a remote target URL."""
+        if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in server):
+            raise ValueError("SpiderFoot server_url must not contain whitespace or control characters")
         parsed = urllib.parse.urlsplit(server)
         if (parsed.scheme not in {"http", "https"} or not parsed.hostname
                 or parsed.username is not None or parsed.password is not None
-                or parsed.query or parsed.fragment or parsed.path not in {"", "/"}):
+                or parsed.query or parsed.fragment or parsed.path not in {"", "/"}
+                or "%" in parsed.hostname):
             raise ValueError("SpiderFoot server_url must be a plain local HTTP(S) origin")
         if parsed.hostname != "localhost":
             try:
@@ -162,12 +203,17 @@ class SpiderFootPlugin(BasePlugin):
             except ValueError as exc:
                 raise ValueError("SpiderFoot server must use localhost or a loopback IP literal") from exc
         try:
-            parsed.port
+            if parsed.port is not None and not 1 <= parsed.port <= 65535:
+                raise ValueError("invalid port")
         except ValueError as exc:
             raise ValueError("invalid SpiderFoot local port") from exc
 
     @staticmethod
     def _request(url: str, timeout: float, fields: Mapping[str, str] | None = None) -> Any:
+        parsed_url = urllib.parse.urlsplit(url)
+        SpiderFootPlugin._validate_local_service(f"{parsed_url.scheme}://{parsed_url.netloc}")
+        if parsed_url.hostname == "localhost":
+            raise ValueError("SpiderFoot requests require a pinned loopback IP literal")
         data = urllib.parse.urlencode(fields).encode("utf-8") if fields else None
         request = urllib.request.Request(url, data=data, method="POST" if fields else "GET")
         request.add_header("Accept", "application/json")
@@ -178,14 +224,22 @@ class SpiderFootPlugin(BasePlugin):
 
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         try:
-            with opener.open(request, timeout=timeout) as response:
-                raw_bytes = response.read(1024 * 1024 + 1)
-                if len(raw_bytes) > 1024 * 1024:
-                    raise ValueError("SpiderFoot response exceeds the 1 MiB limit")
+            with execution_scope(timeout_seconds=timeout), opener.open(request, timeout=remaining_timeout(timeout)) as response:
+                raw_bytes = bytearray()
+                read_chunk = getattr(response, "read1", response.read)
+                while True:
+                    check_execution()
+                    chunk = read_chunk(min(65536, 1024 * 1024 + 1 - len(raw_bytes)))
+                    if not chunk:
+                        break
+                    raw_bytes.extend(chunk)
+                    if len(raw_bytes) > 1024 * 1024:
+                        raise ValueError("SpiderFoot response exceeds the 1 MiB limit")
+                check_execution()
                 raw = raw_bytes.decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
-            body = exc.read(64 * 1024).decode("utf-8", errors="replace")
-            raise RuntimeError(f"SpiderFoot HTTP {exc.code}: {body}") from exc
+            exc.close()
+            raise RuntimeError(f"SpiderFoot HTTP {exc.code}; check the local service configuration") from None
         parsed = parse_json_output(raw)
         return parsed if parsed is not None else raw
 
@@ -236,12 +290,16 @@ class TheHarvesterPlugin(ExternalCommandPlugin):
     )
 
     def run(self, payload: JsonObject, context: PluginContext) -> JsonObject:
+        payload = self.authorize(payload, context)
+        domain = _domain(payload["domain"])
         sources = payload.get("sources", ["crtsh", "duckduckgo"])
+        for source in sources:
+            _argument_value(source, "source")
         with TemporaryToolDirectory("orion-theharvester-") as output:
             prefix = output / "results"
             arguments = [
                 "-d",
-                str(payload["domain"]),
+                domain,
                 "-b",
                 ",".join(sources),
                 "-l",
@@ -311,9 +369,12 @@ class SherlockPlugin(ExternalCommandPlugin):
     )
 
     def run(self, payload: JsonObject, context: PluginContext) -> JsonObject:
+        payload = self.authorize(payload, context)
+        usernames = [_argument_value(item, "username") for item in payload["usernames"]]
+        sites = [_argument_value(item, "site") for item in payload.get("sites", [])]
         with TemporaryToolDirectory("orion-sherlock-") as output:
             arguments = [
-                *[str(item) for item in payload["usernames"]],
+                *usernames,
                 "--print-found",
                 "--no-color",
                 "--folderoutput",
@@ -321,7 +382,7 @@ class SherlockPlugin(ExternalCommandPlugin):
                 "--timeout",
                 str(payload.get("request_timeout", 10)),
             ]
-            for site in payload.get("sites", []):
+            for site in sites:
                 arguments.extend(["--site", str(site)])
             execution = self.runner.run(
                 arguments,
@@ -368,10 +429,16 @@ class OsintSpyPlugin(ExternalCommandPlugin):
     )
 
     def run(self, payload: JsonObject, context: PluginContext) -> JsonObject:
+        payload = self.authorize(payload, context)
+        value = _argument_value(payload["value"], "value")
+        if payload["target_type"] == "domain":
+            _domain(value)
+        elif payload["target_type"] == "ip":
+            ip_address(value)
         resolved = self.runner.resolve()
         working_directory = Path(resolved.path).parent if resolved else None
         execution = self.runner.run(
-            [f"--{payload['target_type']}", str(payload["value"]), "--json"],
+            [f"--{payload['target_type']}", value, "--json"],
             timeout_seconds=_timeout(payload, 120),
             environment=context.environment,
             working_directory=working_directory,
@@ -415,8 +482,10 @@ class PhoneInfogaPlugin(ExternalCommandPlugin):
     )
 
     def run(self, payload: JsonObject, context: PluginContext) -> JsonObject:
+        payload = self.authorize(payload, context)
+        number = _argument_value(payload["number"], "number")
         execution = self.runner.run(
-            ["scan", "-n", str(payload["number"])],
+            ["scan", "-n", number],
             timeout_seconds=_timeout(payload, 120),
             environment=context.environment,
         )
@@ -464,12 +533,14 @@ class PhotonPlugin(ExternalCommandPlugin):
     )
 
     def run(self, payload: JsonObject, context: PluginContext) -> JsonObject:
+        payload = self.authorize(payload, context)
+        url = _web_url(payload["url"])
         resolved = self.runner.resolve()
         working_directory = Path(resolved.path).parent if resolved else None
         with TemporaryToolDirectory("orion-photon-") as output:
             arguments = [
                 "-u",
-                str(payload["url"]),
+                url,
                 "-l",
                 str(payload.get("depth", 2)),
                 "-t",

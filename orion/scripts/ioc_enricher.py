@@ -29,11 +29,20 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List
+
+from orion.jsonio import read_json, read_json_file
 
 
 HASH_RE = re.compile(r"^[A-Fa-f0-9]{32}$|^[A-Fa-f0-9]{40}$|^[A-Fa-f0-9]{64}$")
 DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-zA-Z0-9-]{1,63}\.)+[A-Za-z]{2,63}$")
+_SERVICE_HOSTS = frozenset({"www.virustotal.com", "api.abuseipdb.com", "api.shodan.io", "otx.alienvault.com"})
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str,
+                         headers: Any, newurl: str) -> None:
+        return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,13 +57,9 @@ def parse_args() -> argparse.Namespace:
 def load_iocs(args: argparse.Namespace) -> List[str]:
     values = list(args.ioc)
     if args.input:
-        with open(args.input, "rb") as handle:
-            raw = handle.read(1024 * 1024 + 1)
-        if len(raw) > 1024 * 1024:
-            raise ValueError("IOC input exceeds 1 MiB")
-        data = json.loads(raw)
-        if isinstance(data, list):
-            values.extend(str(item) for item in data)
+        data = read_json_file(args.input)
+        if isinstance(data, list) and all(isinstance(item, str) for item in data):
+            values.extend(data)
         else:
             raise ValueError("El archivo de entrada debe contener una lista JSON.")
     deduped = []
@@ -102,10 +107,26 @@ def dns_lookup(value: str) -> Dict[str, Any]:
 
 
 def fetch_json(url: str, headers: Dict[str, str], timeout: float) -> Dict[str, Any]:
+    """Trusted integration helper: fixed HTTPS services, bounded JSON, no redirects.
+
+    CLI/MCP never expose this helper and the controlled policy denies external
+    enrichment. A custom Python integration must authorize it before calling.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    if (parsed.scheme != "https" or parsed.hostname not in _SERVICE_HOSTS
+            or parsed.username is not None or parsed.password is not None or parsed.fragment
+            or parsed.port not in {None, 443}
+            or any(ord(char) < 33 or ord(char) == 127 for char in url)):
+        raise ValueError("external enrichment requires an approved HTTPS service URL")
+    if type(timeout) not in {float, int} or not 0.1 <= timeout <= 30:
+        raise ValueError("external enrichment timeout must be finite and between 0.1 and 30 seconds")
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = response.read().decode("utf-8")
-    return json.loads(payload)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    with opener.open(request, timeout=timeout) as response:
+        payload = read_json(response)
+    if not isinstance(payload, dict):
+        raise ValueError("external enrichment response must be a JSON object")
+    return payload
 
 
 def safe_fetch(label: str, fn) -> Dict[str, Any]:
@@ -115,7 +136,8 @@ def safe_fetch(label: str, fn) -> Dict[str, Any]:
     except urllib.error.HTTPError as exc:
         return {"ok": False, "source": label, "error": f"HTTP {exc.code}"}
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "source": label, "error": str(exc)}
+        # Transport exception text can contain a complete URL, including API keys.
+        return {"ok": False, "source": label, "error": type(exc).__name__}
 
 
 def enrich_external(ioc_type: str, value: str, timeout: float) -> Dict[str, Any]:
@@ -165,6 +187,10 @@ def build_record(value: str, timeout: float, *, allow_network: bool = False) -> 
     The direct CLI does not expose online mode in the controlled profile.
     All external-source operations remain subject to the higher-level policy.
     """
+    if not isinstance(value, str) or not 1 <= len(value) <= 2048:
+        raise ValueError("IOC must be a string of 1 to 2048 characters")
+    if type(allow_network) is not bool:
+        raise ValueError("allow_network must be a boolean")
     ioc_type = classify_ioc(value)
     record: Dict[str, Any] = {
         "value": value,
@@ -194,6 +220,7 @@ def build_record(value: str, timeout: float, *, allow_network: bool = False) -> 
         record["local"]["dns_performed"] = False
     elif ioc_type == "hash":
         record["local"] = {"algorithm_guess": {32: "md5", 40: "sha1", 64: "sha256"}.get(len(value))}
+    record["local"].setdefault("dns_performed", False)
     if allow_network:
         if not isinstance(timeout, (int, float)) or not 0.1 <= timeout <= 30:
             raise ValueError("online timeout must be between 0.1 and 30 seconds")
@@ -210,7 +237,7 @@ def build_record(value: str, timeout: float, *, allow_network: bool = False) -> 
 def write_output(payload: Dict[str, Any], output: str | None) -> None:
     rendered = json.dumps(payload, indent=2, ensure_ascii=False)
     if output:
-        with open(output, "w", encoding="utf-8") as handle:
+        with open(output, "x", encoding="utf-8") as handle:
             handle.write(rendered + "\n")
     else:
         print(rendered)

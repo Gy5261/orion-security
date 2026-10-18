@@ -30,7 +30,9 @@ import json
 import sys
 from datetime import datetime, timezone
 from collections import defaultdict, Counter
-from typing import Dict, List, Any
+from typing import Dict, Any
+
+from orion.jsonio import read_json_file
 
 
 def parse_timestamp(ts_str: str) -> datetime | None:
@@ -53,21 +55,21 @@ def classify_severity(event: Dict[str, Any]) -> str:
     """Clasifica severity de un evento basado en tipo y contenido."""
     severity = str(event.get("severity") or "info").lower()
     event_type = str(event.get("type") or "").lower()
-    
+
     # Prioridades predefinidas
     critical_patterns = ["failed_login_attempts", "privilege_escalation", "malware", "breach"]
     high_patterns = ["auth_failed", "unauthorized_access", "config_change", "policy_violation"]
-    
+
     message = str(event.get("message", "")).lower()
-    
+
     for pattern in critical_patterns:
         if pattern in message or pattern in event_type:
             return "critical"
-    
+
     for pattern in high_patterns:
         if pattern in message or pattern == event_type:
             return "high"
-    
+
     return severity
 
 
@@ -76,16 +78,18 @@ def main() -> int:
     if len(sys.argv) != 2:
         print("Uso: log_triage.py <events.json>")
         return 1
-    
+
     try:
-        with open(sys.argv[1], "r", encoding="utf-8") as fh:
-            events = json.load(fh)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(json.dumps({"error": f"Failed to load {sys.argv[1]}: {e}"}))
+        events = read_json_file(sys.argv[1])
+    except (OSError, ValueError) as e:
+        print(json.dumps({"error": f"Failed to load bounded event JSON: {e}"}))
         return 1
-    
+
     if not isinstance(events, list):
         print(json.dumps({"error": "Events must be a JSON array"}))
+        return 1
+    if len(events) > 5000:
+        print(json.dumps({"error": "Events exceed the 5000-row limit"}))
         return 1
     for index, event in enumerate(events):
         if not isinstance(event, dict):
@@ -95,7 +99,7 @@ def main() -> int:
             if event.get(field) is not None and not isinstance(event[field], str):
                 print(json.dumps({"error": f"Event {index} field {field} must be a string"}))
                 return 1
-    
+
     # Inicializa contadores y estructuras
     summary = {
         "total_events": len(events),
@@ -116,34 +120,34 @@ def main() -> int:
         "anomalies": [],
         "statistics": {}
     }
-    
+
     user_counter = Counter()
     source_counter = Counter()
     type_counter = Counter()
     time_buckets = defaultdict(int)
     observed_timestamps: list[tuple[datetime, str]] = []
-    
+
     # Procesa eventos
     for event in events:
         user = event.get("user")
         source = event.get("source")
-        event_type = event.get("type", "unknown").lower()
+        event_type = (event.get("type") or "unknown").lower()
         severity = classify_severity(event)
-        
+
         if user:
             user_counter[user] += 1
         if source:
             source_counter[source] += 1
-        
+
         type_counter[event_type] += 1
         summary["severity_distribution"][severity] += 1
-        
+
         # Clasifica auth eventos
         if event_type == "auth_failed":
             summary["auth_failures"] += 1
         elif event_type == "auth_success":
             summary["auth_successes"] += 1
-        
+
         # Timeline
         ts = event.get("timestamp")
         if ts:
@@ -151,11 +155,11 @@ def main() -> int:
             if parsed_ts:
                 hour_bucket = parsed_ts.strftime("%Y-%m-%d %H:00")
                 time_buckets[hour_bucket] += 1
-                
+
                 observed_timestamps.append((parsed_ts, ts))
             else:
                 summary["timeline"]["invalid_timestamps"] += 1
-    
+
     if observed_timestamps:
         summary["timeline"]["first_event"] = min(observed_timestamps, key=lambda item: item[0])[1]
         summary["timeline"]["last_event"] = max(observed_timestamps, key=lambda item: item[0])[1]
@@ -168,21 +172,21 @@ def main() -> int:
     summary["top_users"] = [{"user": u, "count": c} for u, c in user_counter.most_common(10)]
     summary["top_sources"] = [{"source": s, "count": c} for s, c in source_counter.most_common(5)]
     summary["timeline"]["events_per_hour"] = dict(sorted(time_buckets.items()))
-    
+
     # Detección simple de anomalías
     if summary["auth_failures"] > len(events) * 0.3:
         summary["anomalies"].append({
             "type": "high_auth_failure_rate",
             "description": f"Tasa de fallos de autenticación alta: {summary['auth_failures']/len(events)*100:.1f}%"
         })
-    
+
     # Si hay un usuario con muchos eventos, podría ser sospechoso
     if summary["top_users"] and summary["top_users"][0]["count"] > len(events) * 0.2:
         summary["anomalies"].append({
             "type": "concentrated_activity",
             "description": f"Usuario {summary['top_users'][0]['user']} genera {summary['top_users'][0]['count']/len(events)*100:.1f}% de eventos"
         })
-    
+
     summary["statistics"] = {
         "avg_events_per_user": len(events) / max(len(summary["users"]), 1),
         "avg_events_per_source": len(events) / max(len(summary["sources"]), 1),
@@ -190,7 +194,7 @@ def main() -> int:
         "unique_source_count": len(summary["sources"]),
         "unique_event_types": len(summary["event_types"])
     }
-    
+
     # Salida
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0

@@ -81,16 +81,22 @@ def cert_to_json(cert: dict[str, Any]) -> dict[str, Any]:
 
 def audit_target(target: str, timeout: float) -> dict[str, Any]:
     """Inspect bounded TLS metadata without claiming certificate validation."""
+    from orion.plugins.execution import check_execution, remaining_timeout
+
+    check_execution()
     peer = lab_preflight({"targets": [target], "workers": 1, "timeout": timeout})["peers"][0]
     host, port = peer["address"], peer["port"]
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
-    with socket.create_connection((host, port), timeout=timeout) as sock:
+    with socket.create_connection((host, port), timeout=remaining_timeout(timeout)) as sock:
+        # TCP connect and TLS handshake share the runtime's remaining budget.
+        sock.settimeout(remaining_timeout(timeout))
         with context.wrap_socket(sock, server_hostname=None) as tls_sock:
-            tls_sock.settimeout(timeout)
+            tls_sock.settimeout(remaining_timeout(timeout))
             certificate = tls_sock.getpeercert(binary_form=True)
             cipher = tls_sock.cipher()
+            check_execution()
             return {
                 "target": target, "peer_ip": tls_sock.getpeername()[0],
                 "version": tls_sock.version(),
