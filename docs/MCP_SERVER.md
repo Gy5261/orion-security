@@ -1,175 +1,70 @@
-# ORION MCP server
+# Servidor MCP de ORION Security
 
-> **Seguridad MCP:** el servidor es local, no autentica procesos vecinos y no implementa OAuth remoto ni conformidad con MCP 2026-07-28. Los ejemplos históricos de conexiones remotas no son instrucciones válidas para el perfil controlado. Consulte [operación controlada](CONTROLLED_OPERATION.md).
+## Instalación y transportes
 
-
-ORION 2.1 exposes the complete plugin runtime and repository catalog through the Model Context Protocol. The server is client-neutral: any host that implements MCP can discover the same tools, resources, templates and prompts without vendor-specific code.
-
-## Installation
-
-```bash
-python -m pip install -e ".[mcp]"
-```
-
-The stable MCP Python SDK is kept behind the optional dependency so the base ORION CLI remains lightweight.
-
-## Standard transports
-
-### stdio
-
-Recommended for local desktop applications, IDEs and agent processes.
+Instale `python -m pip install ".[mcp]"`; el extra exige `mcp>=1.30,<2`. La instalación básica permite inspeccionar configuración sin importar el SDK, pero iniciar el servidor necesita ese extra.
 
 ```bash
 orion-mcp --transport stdio
+orion-mcp --transport streamable-http --host 127.0.0.1 --port 8000
+orion-mcp --transport sse --host 127.0.0.1 --port 8000
+orion-mcp --print-config
 ```
 
-The process writes only MCP JSON-RPC messages to stdout. Diagnostics use stderr.
+`--host ::1` publica un endpoint IPv6 con corchetes en el URI. `--allow-remote` se mantiene por compatibilidad del parser, pero no habilita un servicio remoto. No hay autenticación OAuth multiusuario implementada.
 
-### Streamable HTTP
+## Superficie pública
 
-Recommended for remote, multi-client and browser-capable deployments.
+| Herramienta | Resultado |
+|---|---|
+| `orion_mcp_capabilities` | Capacidades y transporte observado |
+| `orion_client_config` | Configuración validada de clientes |
+| `orion_list_plugins` | Manifiesto de plugins y diagnóstico opcional |
+| `orion_get_plugin` | Contrato de un plugin |
+| `orion_doctor` | Disponibilidad de implementaciones y dependencias |
+| `orion_run_plugin` | Ejecución según la política controlada |
+| `orion_search_resources` | Búsqueda literal de documentación |
+| `orion_resource_links` | Bloques MCP `ResourceLink` |
+| `orion_read_resource` | Contenido de texto publicado |
+| `orion_read_resource_content` | Contenido tipado; base64 para binarios |
+| `orion_control_status` | Estado de controles sin rutas privadas |
+| `orion_request_review` | Preflight y huella; no concede autorización |
+| `orion_protocol_audit` | Versión del SDK, protocolo observado y límites |
 
-```bash
-orion-mcp \
-  --transport streamable-http \
-  --host 127.0.0.1 \
-  --port 8000 \
-  --path /mcp \
-  --stateless \
-  --json-response
-```
+Se conservan los prompts `authorized_security_workflow`, `mcp_integration_guide` y `controlled_lab_workflow`. Los recursos estáticos y plantillas enlazan manifiestos, controles, contratos y archivos del catálogo.
 
-Use `--stream-response` when the client expects `text/event-stream` responses. Remote interfaces such as `0.0.0.0` require `--allow-remote` explicitly.
+## Validación y concurrencia
 
-### Legacy SSE
+Los argumentos se validan con tipos JSON reales antes de la conversión del SDK: `"false"` no es un booleano y una cadena que contiene JSON no equivale a un objeto. Se rechazan campos desconocidos y entradas fuera de presupuesto.
 
-Available for older clients that still implement the superseded HTTP+SSE transport.
+Los callbacks síncronos se ejecutan en un pool acotado, para que un plugin no bloquee el bucle asíncrono de MCP. Se admiten 8 workers y 64 trabajos pendientes/en ejecución. La saturación produce un error explícito. La cancelación se transmite al runtime y a los adaptadores mediante un token compartido.
 
-```bash
-orion-mcp \
-  --transport sse \
-  --host 127.0.0.1 \
-  --port 8000 \
-  --sse-path /sse \
-  --message-path /messages/
-```
+Los errores de herramientas usan `isError` y un mensaje sanitizado. Las excepciones de lectura, diagnóstico y ejecución no devuelven rutas del operador ni valores sensibles del entorno. Los resultados también tienen presupuesto de serialización UTF-8.
 
-New deployments should prefer Streamable HTTP.
+## Frontera HTTP
 
-## Browser clients and CORS
+El guard y la protección DNS-rebinding del SDK usan las mismas listas exactas de Host/Origin, incluyendo IPv6. CORS opcional requiere orígenes HTTP(S) concretos, sin credenciales, rutas ni comodines. Origin no autentica programas que ya se ejecutan en el equipo.
 
-Expose only trusted origins:
+Se rechazan cabeceras de seguridad duplicadas, longitud contradictoria, combinación Content-Length/Transfer-Encoding, cuerpos en métodos que no los admiten, cuerpos excesivos y carga demasiado lenta. Límites: 1 MiB de cuerpo, 32 KiB de cabeceras, 128 cabeceras, 4.096 fragmentos y 10 segundos de recepción. Se admiten como máximo 64 solicitudes HTTP simultáneas, incluidos streams; al saturarse se devuelve 503 antes de almacenar otro cuerpo. Los streams de respuesta no se almacenan completos en el guard.
 
-```bash
-orion-mcp \
-  --transport streamable-http \
-  --cors-origin https://client.example \
-  --cors-origin http://localhost:5173
-```
+Los POST atraviesan el parser JSON estricto compartido antes del SDK: se rechazan UTF-8 inválido, claves repetidas, números no finitos y estructuras fuera del presupuesto.
 
-ORION exposes `Mcp-Session-Id` and accepts the standard Streamable HTTP methods and protocol headers. `--allow-any-origin` exists for isolated development only.
+## Frontera stdio y salidas
 
-## Environment configuration
+El adaptador `orion.mcp.stdio` lee cada mensaje con un límite de 1 MiB más el delimitador. No usa una lectura de línea ilimitada. Aplica la misma validación UTF-8 y JSON estricta antes de entregar el mensaje al SDK; un documento inválido sigue la ruta de error de parseo sin reenviar su contenido privado. Si una línea excede el límite, se cierra la conexión sin drenar una entrada potencialmente interminable ni interpretar su cola como otra solicitud.
 
-All command-line defaults can be provided through environment variables:
+El SDK mantiene la negociación, JSON-RPC y las notificaciones de cancelación. Las respuestas de herramientas, recursos y prompts se limitan a 8 MiB; el cálculo incluye bytes UTF-8 y las representaciones estructurada y textual de los resultados. Stdio dispone además de una última cota de 8 MiB + 4 KiB para la trama serializada y escribe exclusivamente mensajes del protocolo en stdout. Los diagnósticos corresponden a stderr. Un archivo permitido por el catálogo puede superar el presupuesto MCP después de codificarlo en base64 o duplicar su texto en `structuredContent`; en ese caso debe publicarse una versión menor.
 
-| Variable | Purpose |
-| --- | --- |
-| `ORION_MCP_TRANSPORT` | `stdio`, `streamable-http` or `sse` |
-| `ORION_MCP_HOST` | Bind address; defaults to `127.0.0.1` |
-| `ORION_MCP_PORT` | HTTP port; defaults to `8000` |
-| `ORION_MCP_PATH` | Streamable HTTP endpoint; defaults to `/mcp` |
-| `ORION_MCP_SSE_PATH` | Legacy SSE endpoint |
-| `ORION_MCP_MESSAGE_PATH` | Legacy SSE message endpoint |
-| `ORION_MCP_STATELESS` | Stateless HTTP session mode |
-| `ORION_MCP_RESPONSE_MODE` | `json` or `stream` |
-| `ORION_MCP_CORS_ORIGINS` | Comma-separated trusted origins |
-| `ORION_MCP_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL` |
-| `ORION_RESOURCE_ROOT` | Repository/catalog root |
-| `ORION_RESOURCE_MAX_BYTES` | Maximum exposed resource size |
+## Recursos y confianza
 
-Inspect the resolved configuration without starting the protocol server:
+`ORION_RESOURCE_ROOT` define el árbol documental que el operador autoriza a publicar. En instalación fuente se usa el repositorio; en wheel, los datos empaquetados de `orion`. Un directorio de trabajo ajeno no se adopta automáticamente.
 
-```bash
-orion-mcp --transport streamable-http --print-config
-```
+No se publican enlaces, rutas privadas de controles, directorios ocultos ni carpetas reservadas de evidencia. El contenido recuperado sigue siendo dato no confiable; no autoriza comandos ni cambios de política.
 
-## Client-neutral configuration
+## Pruebas y compatibilidad
 
-Most local clients use the common `mcpServers` shape:
+La suite comprueba las trece herramientas, prompts, recursos, errores y round trips de stdio, Streamable HTTP y SSE. HTTP se prueba con las combinaciones de estado y formato de respuesta, más ASGI en memoria para framing, IPv6 y CORS.
 
-```json
-{
-  "mcpServers": {
-    "orion": {
-      "command": "orion-mcp",
-      "args": ["--transport", "stdio"]
-    }
-  }
-}
-```
+La revisión usa la familia de SDK 1.x y su negociación `initialize`; no anuncia conformidad con MCP 2026-07-28 ni soporte de extensiones que no implementa. Consulte `orion_protocol_audit` para el estado del entorno real.
 
-A remote descriptor uses the MCP endpoint:
-
-```json
-{
-  "mcpServers": {
-    "orion": {
-      "url": "https://orion.example/mcp",
-      "transport": "streamable-http"
-    }
-  }
-}
-```
-
-The `orion_client_config` tool and `orion://mcp/client-config/{client}/{transport}` resource generate configurations for generic clients, Claude Desktop, Claude Code, Cursor, Windsurf, Cline, Roo Code, VS Code and GitHub Copilot. Unknown client names receive a standards-based generic descriptor instead of failing.
-
-## MCP tools
-
-- `orion_mcp_capabilities`: reports protocol, transports, encodings and exposed primitives.
-- `orion_client_config`: generates a client-specific connection descriptor.
-- `orion_list_plugins`: returns every plugin contract and optional dependency health.
-- `orion_get_plugin`: returns one exact plugin contract.
-- `orion_doctor`: validates plugin discovery, resources and MCP runtime metadata.
-- `orion_run_plugin`: executes one plugin with explicit authorization and permissions.
-- `orion_search_resources`: searches text resources and binary filenames.
-- `orion_resource_links`: returns MCP resource-link descriptors.
-- `orion_read_resource`: reads a UTF-8 text resource.
-- `orion_read_resource_content`: returns text or base64 binary content with MIME metadata.
-
-Dictionary and list results are emitted as structured tool output by FastMCP and retain the JSON text fallback required for older clients.
-
-## MCP resources
-
-- `orion://manifest`
-- `orion://mcp/capabilities`
-- `orion://repository/index`
-- `orion://plugins/{plugin_id}`
-- `orion://mcp/client-config/{client}/{transport}`
-- one exact `orion://repository/<path>` resource for every permitted repository file
-
-The catalog supports source, Markdown, JSON, JSONL, YAML, TOML, HTML, XML, CSV, shell files, images, audio and PDF resources. Text is returned as UTF-8; binary resources use MCP blob/base64 semantics. Secret-like files, caches, build outputs, symlinks, path traversal and oversized resources are blocked.
-
-## MCP prompts
-
-- `authorized_security_workflow`: establishes authorization and least-privilege execution rules.
-- `mcp_integration_guide`: returns integration instructions and a concrete client configuration.
-
-## Validation
-
-CI performs real round trips with the official MCP client SDK over:
-
-1. stdio;
-2. Streamable HTTP;
-3. legacy SSE.
-
-Each session initializes, negotiates capabilities, lists tools/resources/prompts and calls `orion_mcp_capabilities`. This catches transport and schema regressions rather than validating construction only.
-
-## Security defaults
-
-- HTTP binds to loopback by default.
-- Remote binding requires explicit confirmation.
-- CORS is disabled unless trusted origins are provided.
-- Plugin authorization, network permission and side-effect permission remain separate.
-- Repository resources are read-only and bounded.
-- SSE is retained only for backwards compatibility.
+Véase [Arquitectura](../orion/ARCHITECTURE.md), [operación controlada](CONTROLLED_OPERATION.md) y [evidencia de revisión](SECURITY_REVIEW_2026-10-18.md).

@@ -1,90 +1,106 @@
-# ORION — revisión de seguridad y operación controlada
+# ORION Security
 
-Runtime defensivo con análisis local, controles de autorización para laboratorios y servidor MCP local. **Esta rama es una propuesta de revisión, no una nueva versión publicada ni una certificación legal.**
+Runtime de seguridad defensiva para análisis local, plugins con contratos JSON y clientes MCP. La revisión **2.1.1** refuerza las fronteras de entrada, los procesos externos, los recursos publicados y la instalación del paquete.
 
-Antes de modificar el runtime se ejecutó la línea base: 24 pruebas aprobadas, compilación de distribuciones y diagnóstico. La primera revisión del código amplió la suite a **114 pruebas aprobadas**. Véase [evidencia y alcance de la auditoría](docs/MCP_AUDIT_2026-09-23.md).
+Se conservan el nombre de distribución `orion-hacking-etico`, los comandos `orion` / `orion-mcp`, los nueve identificadores de plugins y las trece herramientas MCP. El código base no necesita dependencias externas; MCP se instala como extra.
 
-## Empezar sin contactar objetivos
+## Instalación
+
+Requiere Python 3.10 o posterior. Cree un entorno aislado y use una versión mantenida del intérprete.
 
 ```bash
-python -m pip install -e ".[dev,mcp]"
-python -m orion plugins doctor
-python -m orion plugins run ioc_enricher --input samples/controlled/offline-iocs.json --authorization LOCAL-CLASSIFICATION-001
-python -m orion.mcp.server --transport stdio
+python -m venv .venv
 ```
 
-El ejemplo clasifica una IP literal y un hash sin resolución DNS ni fuentes externas. Una referencia escrita por el usuario no demuestra consentimiento legal.
+En Linux/macOS active `source .venv/bin/activate`; en PowerShell, `.venv\Scripts\Activate.ps1`. Después:
 
-## Qué cambia
+```bash
+python -m pip install --upgrade "pip>=26.2,<27"
+python -m pip install -e ".[dev,mcp]"
+python -m orion --version
+python -m orion plugins doctor
+```
 
-- Red denegada por defecto: el perfil solo admite sondas TLS acotadas de laboratorio con permiso independiente y solicitud exacta aprobada. Los adaptadores OSINT externos permanecen visibles, pero no pueden ejecutarse online desde este perfil.
-- Cambios externos de plugins deshabilitados: los hallazgos se preparan como planes; la creación automática de tickets queda bloqueada.
-- Aprobaciones con propietario, revisor, finalidad, referencia documental, fechas, huella SHA-256 y cupo de uso. Las cuotas se consumen mediante transacciones SQLite.
-- Bloqueo de emergencia, rechazo de datos JSON no finitos o excesivos, importación de plugins externos desactivada por defecto y exclusión de archivos privados del catálogo MCP.
-- MCP con 13 herramientas, 3 prompts, recursos tipados, enlaces MCP reales, errores `isError`, protección HTTP local de Host/Origin y tamaño del cuerpo.
+Para utilizar únicamente el núcleo, `python -m pip install .` basta. Los ejecutables OSINT son opcionales y no se descargan ni ejecutan durante la instalación o el diagnóstico.
 
-## MCP: compatibilidad explícita
+## Primera ejecución: análisis sin red
+
+```bash
+python -m orion plugins run ioc_enricher --input samples/controlled/offline-iocs.json --authorization LOCAL-CLASSIFICATION-001
+python -m orion plugins describe ioc_enricher
+python -m orion runtime-info --json
+```
+
+La clasificación de IP, dominio, URL o hash no hace consultas DNS cuando `external_sources` es `false` o se omite. `classification_only` y `local.dns_performed` indican qué se hizo. Los planes de Jira y ServiceNow se exportan como JSON; el perfil controlado no crea tickets.
+
+## Capacidades y permisos efectivos
+
+| Componente | Funcionamiento |
+|---|---|
+| `ioc_enricher` | Clasificación local, sin consultas externas por defecto |
+| `findings_ticket_sync` | Planificación de tickets para revisión |
+| `tls_posture_audit` | Negociación TLS y huella del certificado; laboratorio con aprobación exacta y cuota |
+| `spiderfoot`, `theharvester`, `sherlock`, `osint_spy`, `phoneinfoga`, `photon` | Adaptadores opcionales con diagnóstico; su ejecución online está denegada por el perfil controlado |
+| Recursos MCP | Lectura y búsqueda léxica acotada de documentación publicada |
+| Scripts locales | Normalización de hallazgos, triage de eventos, revisión de cabeceras guardadas e inventario SHA-256 |
+
+Un plugin instalado no queda autorizado por estar disponible. El detalle de aprobación, vigencia, cuotas y parada de emergencia está en [Operación controlada](docs/CONTROLLED_OPERATION.md).
+
+## MCP
+
+Para un cliente que lanza procesos locales:
+
+```json
+{
+  "mcpServers": {
+    "orion": {
+      "command": "orion-mcp",
+      "args": ["--transport", "stdio"]
+    }
+  }
+}
+```
+
+Use la ruta absoluta al ejecutable si el cliente no hereda el entorno virtual. También se admite Streamable HTTP en loopback:
 
 ```bash
 python -m orion.mcp.server --transport streamable-http --host 127.0.0.1 --port 8000
 ```
 
-Se conservan stdio, Streamable HTTP y SSE legado del SDK 1.x. La revisión se probó con SDK 1.30.0, cuya revisión declarada es 2025-11-25. **No implementa todavía MCP 2026-07-28.** `orion_protocol_audit` describe esta diferencia en ejecución. No hay despliegue remoto OAuth implementado: `--allow-remote` no elimina la restricción local.
+MCP requiere SDK `>=1.30,<2`. Se mantienen stdio, Streamable HTTP y SSE legado. El servidor valida los argumentos antes de que el SDK pueda convertir tipos, mantiene el trabajo síncrono fuera del bucle asíncrono y devuelve errores estructurados. Consulte [configuración, límites y transportes](docs/MCP_SERVER.md).
 
-Configuración local de un cliente:
+## Arquitectura
 
-```json
-{"mcpServers":{"orion":{"command":"orion-mcp","args":["--transport","stdio"]}}}
-```
+| Módulo | Responsabilidad |
+|---|---|
+| `orion/jsonio.py` | JSON UTF-8 con límites de bytes, profundidad, elementos y enteros |
+| `orion/fileio.py` | Apertura de archivos regulares mediante descriptores; rechazo de enlaces |
+| `orion/controls.py` | Política de laboratorio, aprobaciones, cuotas SQLite y auditoría mínima |
+| `orion/plugins/core.py` | Contratos, registro, copia validada de solicitudes y resultados |
+| `orion/plugins/execution.py` | Plazos compartidos y cancelación cooperativa |
+| `orion/plugins/adapters.py`, `processes.py`, `redaction.py` | Argumentos y entorno, limpieza de procesos, captura y redacción |
+| `orion/mcp/` | Configuración, transporte, validación y ejecución de callbacks |
+| `orion/resources.py` | Catálogo de publicación con recorrido, lecturas y búsqueda acotados |
 
-El soporte de la configuración de cada aplicación debe verificarse en esa aplicación; la suite no equivale a probar todos los productos comerciales.
+Las dependencias y los límites de confianza se explican en [Arquitectura](orion/ARCHITECTURE.md). El [registro de revisión](docs/SECURITY_REVIEW_2026-10-18.md) relaciona defectos corregidos con sus pruebas.
 
-## Documentación de esta revisión
-
-- [Operación controlada, configuración, límites y recuperación](docs/CONTROLLED_OPERATION.md).
-- [Revisión de consentimiento, privacidad y reglas de compromiso](docs/LEGAL_AND_PRIVACY_REVIEW.md).
-- [Auditoría MCP, resultados reales y migración pendiente](docs/MCP_AUDIT_2026-09-23.md).
-- [Contrato de ingeniería](AGENTS.md).
-
-La guía de operación controlada prevalece sobre ejemplos de red de las guías históricas de [plugins](docs/PLUGIN_SYSTEM.md), [OSINT](docs/OSINT_INTEGRATIONS.md) y [MCP](docs/MCP_SERVER.md). Los playbooks, el HTML y los scripts históricos no se han reescrito ni certificado en esta revisión.
-
-## Límites de confianza
-
-El servidor requiere un operador local de confianza. Las etiquetas de actor no son identidad autenticada; la aprobación local no es firma electrónica ni verificación jurídica. Una IP privada no prueba propiedad ni aislamiento. SQLite no proporciona un registro inmutable frente al administrador. Los scripts de `orion/scripts/`, las llamadas directas a motores y las políticas Python personalizadas quedan fuera del perímetro de ejecución controlada: no deben exponerse a agentes ni usuarios no confiables.
-
-No se debe desplegar en producción o como servicio multiusuario. Las restricciones de esta rama cambian comportamiento de 2.x; antes de publicar o fusionar como lanzamiento se necesita una decisión de versión mayor y revisar el manifiesto estático histórico. `main` no se modifica desde este PR de revisión.
-
-## Reproducir verificaciones
+## Verificación
 
 ```bash
 python tools/validate_repository.py
-python -m pytest
+python -m ruff check orion tools tests .github/scripts
+python -m mypy orion
+python -m pytest --allow-hosts=127.0.0.1,::1 --allow-unix-socket --timeout=90
 python -m build
 python -m orion plugins doctor
 ```
 
-Las pruebas emplean datos sintéticos, archivos temporales, ASGI en memoria y transportes loopback. La instalación de dependencias de CI sí requiere acceso a sus repositorios de paquetes; las pruebas no realizan evaluaciones de terceros.
+Las pruebas usan fixtures, ejecutables ficticios y servicios locales. El guard de pytest restringe sockets Python; la instalación de dependencias y la auditoría de avisos de seguridad usan servicios de paquetes. El [flujo de desarrollo](docs/DEVELOPMENT.md) describe la matriz de CI y la comprobación de wheel/sdist fuera del checkout.
 
+## Límites operativos
 
-## Python 3.15 — modernización y pruebas
+El operador local, el intérprete y las herramientas externas instaladas forman parte del entorno de confianza. ORION no aísla código Python hostil, no limita toda la RAM o el disco de un ejecutable externo y no autentica múltiples usuarios por OAuth. Las etiquetas de actor y las referencias de aprobación no prueban identidad; los recursos y prompts no conceden permisos.
 
-**Versión recomendada:** Python 3.15.0 estable (9 de octubre de 2026), no la RC1. Se conserva soporte de instalación desde Python 3.10 para no romper automatizaciones existentes. La CI comprueba Python 3.12 y 3.15 en Linux y Python 3.15 en Windows.
+Los deadlines interrumpen adaptadores en sus puntos de control y rechazan resultados tardíos. Python arbitrario en proceso requiere aislamiento del sistema operativo para una interrupción forzosa. El servidor HTTP se limita a loopback; Host y Origin se comprueban, pero no sustituyen autenticación.
 
-```bash
-python -m orion runtime-info --json
-python orion/scripts/run_skill_sanity.py
-python tools/benchmark_runtime.py --iterations 500 --samples 5
-```
-
-La CLI inspecciona características observadas del intérprete. El benchmark mide operaciones locales: **no** supone aceleraciones, auditorías reales, soporte de terceros ni conformidad de seguridad. La ejecución de procesos externos tiene captura acotada y deadlines efectivos; el timeout lógico de plugins Python en proceso continúa sin aislamiento forzoso.
-
-Detalles técnicos y límites: [Migración a Python 3.15](docs/PYTHON_315_MIGRATION.md).
-
-
-## Auditoría transversal de código — octubre de 2026
-
-El [registro de cambios por carpeta](docs/FOLDER_AUDIT_2026-10-12.md) describe las correcciones en controles, plugins, MCP, scripts, pruebas, datos, documentación y CI. Este registro separa resultados reproducibles, cambios de política y pendientes.
-
-**Operación real:** el modo IOC local no resuelve DNS; los scripts de tickets sólo crean planes; TLS exige aprobación de laboratorio y declara que el certificado no fue validado por una PKI; el análisis HTTP usa cabeceras guardadas o loopback explícito. Los instaladores muestran un plan antes de aplicar.
-
-Las pruebas automáticas no demuestran que todos los integradores externos funcionen ni que el código carezca de defectos. No utilizar listas de capacidades como evidencia de vulnerabilidades o despliegues certificados.
+Las guías actuales enlazadas aquí prevalecen sobre los informes históricos de `docs/` y el contenido metodológico de `orion/references/`. Esos archivos se conservan como material de consulta, no como evidencia de capacidades ejecutadas.

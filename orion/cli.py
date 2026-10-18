@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from orion import __version__
-from orion.controls import MAX_DOCUMENT_BYTES
+from orion.jsonio import canonical_json, read_json, read_json_file
 from orion.plugins.core import (
     OrionPluginError,
     OrionRuntime,
@@ -26,32 +26,14 @@ from orion.plugins.core import (
 def _read_json(path: str) -> dict[str, Any]:
     """Read no more than the control document budget, rejecting duplicate keys."""
 
-    if path == "-":
-        raw = sys.stdin.buffer.read(MAX_DOCUMENT_BYTES + 1)
-    else:
-        with Path(path).open("rb") as handle:
-            raw = handle.read(MAX_DOCUMENT_BYTES + 1)
-    if len(raw) > MAX_DOCUMENT_BYTES:
-        raise ValueError("plugin input exceeds the 1 MiB document limit")
-
-    def unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"duplicate JSON key: {key}")
-            result[key] = value
-        return result
-
-    def reject_constant(value: str) -> None:
-        raise ValueError(f"non-finite JSON constant is not allowed: {value}")
-
-    payload = json.loads(raw, object_pairs_hook=unique_keys, parse_constant=reject_constant)
+    payload = read_json(sys.stdin.buffer) if path == "-" else read_json_file(path)
     if not isinstance(payload, dict):
         raise ValueError("plugin input must be a JSON object")
     return payload
 
 
 def _write_json(payload: Any, output: str | None = None) -> None:
+    canonical_json(payload, max_bytes=2 * 1024 * 1024)
     rendered = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n"
     if output:
         Path(output).write_text(rendered, encoding="utf-8")

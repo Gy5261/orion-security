@@ -14,65 +14,99 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
 jobs:
-  verify:
-    name: Verify / Python ${{ matrix.python }} / ${{ matrix.os }}
+  quality:
+    name: Source and contract quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install development dependencies
+        run: |
+          python -m pip install --upgrade 'pip>=26.2,<27'
+          python -m pip install ".[dev,mcp]"
+          python -m pip check
+      - name: Compile, lint, and type-check
+        run: |
+          python -m compileall -q orion tools tests .github/scripts
+          python -m ruff check orion tools tests .github/scripts
+          python -m mypy orion
+      - name: Validate schemas, manifest, entry points, and process calls
+        run: python tools/validate_repository.py
+      - name: Validate shell bootstrap without installing tools
+        run: |
+          bash -n orion/scripts/install-safe-tooling.sh
+          bash orion/scripts/install-safe-tooling.sh --plan --category core
+      - name: Check isolated script behavior
+        run: python orion/scripts/run_skill_sanity.py
+      - name: Build and verify the standalone knowledge site
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          python -m orion.scripts.build_singlefile_site
+          python tools/verify_singlefile.py orion/ORION-HACKING-singlefile.html --js-output "$RUNNER_TEMP/orion-site.js"
+          node --check "$RUNNER_TEMP/orion-site.js"
+      - name: Retain verified standalone HTML
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: orion-standalone-html
+          path: orion/ORION-HACKING-singlefile.html
+          if-no-files-found: error
+          retention-days: 14
+
+  test:
+    name: Python ${{ matrix.python }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {os: ubuntu-latest, python: "3.12"}
-          - {os: ubuntu-latest, python: "3.15"}
-          - {os: windows-latest, python: "3.15"}
+          - {os: ubuntu-24.04, python: "3.10"}
+          - {os: ubuntu-24.04, python: "3.12"}
+          - {os: ubuntu-24.04, python: "3.14"}
+          - {os: ubuntu-24.04, python: "3.15"}
+          - {os: windows-2025, python: "3.12"}
+          - {os: windows-2025, python: "3.15"}
     defaults:
       run:
         shell: bash
-
     steps:
-      - name: Checkout exact revision
-        uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 1
           persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-
+          cache-dependency-path: pyproject.toml
       - name: Install package and MCP SDK
         run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade 'pip>=26.2,<27'
           python -m pip install ".[dev,mcp]"
           python -m pip check
-
-      - name: Compile source
-        run: |
-          set -euo pipefail
-          python -m compileall -q orion tools tests
-
-      - name: Lint MCP surface
-        run: |
-          set -euo pipefail
-          python -m ruff check \
-            orion/mcp \
-            orion/resources.py \
-            orion/runtime_info.py \
-            tests/test_python315_hardening.py \
-            tests/test_mcp_compat.py \
-            tests/test_mcp_transports.py
-
-      - name: Validate shell bootstrap (offline)
-        if: runner.os == 'Linux'
-        run: |
-          bash -n orion/scripts/install-safe-tooling.sh
-          bash orion/scripts/install-safe-tooling.sh --plan --category core
-
-      - name: Validate PowerShell bootstrap (offline)
+          python -m pip freeze > "$RUNNER_TEMP/orion-test-environment.txt"
+      - name: Compile on this interpreter
+        run: python -m compileall -q orion tools tests .github/scripts
+      - name: Test with only loopback sockets allowed
+        run: >-
+          python -m pytest -v
+          --allow-hosts=127.0.0.1,::1 --allow-unix-socket --timeout=90
+          --junitxml="$RUNNER_TEMP/orion-tests.xml"
+      - name: Validate PowerShell bootstrap without installing tools
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -88,72 +122,90 @@ jobs:
           if ($plan.mode -ne 'plan' -or $plan.contact_network -ne $false) {
             throw 'Default PowerShell installer must be read-only'
           }
-
-      - name: Check undefined symbols throughout Python source
+      - name: Record actual interpreter and optional-tool health
         run: |
-          python -m ruff check --select E4,E7,E9,F821,F822,F823 orion tools tests
-
-      - name: Validate repository contracts
-        run: |
-          set -euo pipefail
-          python tools/validate_repository.py
-
-      - name: Test MCP interoperability
-        run: |
-          set -euo pipefail
-          python -m pytest \
-            tests/test_mcp_compat.py \
-            tests/test_mcp_transports.py
-
-      - name: Test full offline suite
-        run: python -m pytest -v
-
-      - name: Check isolated script sanity
-        run: python orion/scripts/run_skill_sanity.py
-
-      - name: Build and verify standalone knowledge site
-        if: runner.os == 'Linux' && matrix.python == '3.15'
-        run: |
-          set -euo pipefail
-          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
-          python -m orion.scripts.build_singlefile_site
-          python tools/verify_singlefile.py orion/ORION-HACKING-singlefile.html --js-output orion-site-syntax.js
-          node --check orion-site-syntax.js
-
-      - name: Upload verified standalone HTML
-        if: runner.os == 'Linux' && matrix.python == '3.15'
-        uses: actions/upload-artifact@v4
+          python -m orion runtime-info --json
+          python -m orion plugins doctor
+      - name: Retain tests and dependency evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: orion-standalone-html
-          path: orion/ORION-HACKING-singlefile.html
-          if-no-files-found: error
+          name: tests-${{ matrix.os }}-py${{ matrix.python }}
+          path: |
+            ${{ runner.temp }}/orion-tests.xml
+            ${{ runner.temp }}/orion-test-environment.txt
+          if-no-files-found: warn
           retention-days: 14
 
-      - name: Build wheel and sdist
-        run: python -m build --outdir "$RUNNER_TEMP/orion-dist"
-
-      - name: Report runtime capabilities
-        run: python -m orion runtime-info --json
-
-      - name: Validate runtime
+  core:
+    name: Base install without MCP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+      - name: Install core and development tools only
         run: |
-          set -euo pipefail
-          python -m orion plugins doctor > orion-doctor.json
-          python -m orion plugins list --json > orion-manifest.json
-          python -m orion.mcp.server --transport streamable-http --print-config > orion-mcp-config.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
+          python -m pip install --upgrade 'pip>=26.2,<27'
+          python -m pip install ".[dev]"
+          python -m pip check
+          python -c "import importlib.util; assert importlib.util.find_spec('mcp') is None"
+      - name: Validate and test without the optional SDK
+        run: |
+          python tools/validate_repository.py
+          python -m pytest --allow-hosts=127.0.0.1,::1 --allow-unix-socket --timeout=90
+          python -m orion plugins doctor
 
-          doctor = json.loads(Path("orion-doctor.json").read_text(encoding="utf-8"))
-          manifest = json.loads(Path("orion-manifest.json").read_text(encoding="utf-8"))
-          mcp_config = json.loads(Path("orion-mcp-config.json").read_text(encoding="utf-8"))
-
-          assert doctor["ok"] is True, doctor
-          assert doctor["plugin_count"] == 9, doctor
-          assert manifest["manifest_version"] == "2.0", manifest
-          assert len(manifest["plugins"]) == 9, manifest
-          assert mcp_config["transport"] == "streamable-http", mcp_config
-          assert mcp_config["endpoint"].endswith("/mcp"), mcp_config
-          print("ORION Python 3.15 / compatible runtime verification passed")
-          PY
+  package:
+    name: Wheel and source distribution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Prepare build tools and optional SDK
+        run: |
+          python -m pip install --upgrade 'pip>=26.2,<27'
+          python -m pip install ".[dev,mcp]"
+      - name: Build the wheel from the source distribution
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          python -m build --outdir "$RUNNER_TEMP/orion-dist"
+      - name: Install base wheel in a clean virtual environment without dependencies
+        run: |
+          python -m venv "$RUNNER_TEMP/orion-wheel-base"
+          "$RUNNER_TEMP/orion-wheel-base/bin/python" -m pip install --no-index --no-deps "$RUNNER_TEMP"/orion-dist/*.whl
+          "$RUNNER_TEMP/orion-wheel-base/bin/python" -m pip check
+          "$RUNNER_TEMP/orion-wheel-base/bin/python" -I .github/scripts/smoke_install.py --expect-mcp absent
+      - name: Install source distribution and verify outside the checkout
+        run: |
+          python -m pip install --force-reinstall --no-deps "$RUNNER_TEMP"/orion-dist/*.tar.gz
+          python -m pip check
+          python -I .github/scripts/smoke_install.py --expect-mcp present
+      - name: Resolve the wheel MCP extra and verify installed resources
+        run: |
+          wheel=("$RUNNER_TEMP"/orion-dist/*.whl)
+          python -m pip install --force-reinstall "${wheel[0]}[mcp]"
+          python -m pip check
+          python -I .github/scripts/smoke_install.py --expect-mcp present
+          python -m pip freeze > "$RUNNER_TEMP/orion-dist/resolved-environment.txt"
+      - name: Retain verified distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: orion-distributions
+          path: ${{ runner.temp }}/orion-dist
+          if-no-files-found: error
+          retention-days: 14

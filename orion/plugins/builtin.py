@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Callable, Iterable
 
 from .core import BasePlugin, JsonObject, PluginContext, PluginMetadata
+from .execution import ExecutionCancelledError, check_execution, remaining_timeout
 
 
 def _workers(payload: JsonObject, item_count: int) -> int:
@@ -15,10 +17,23 @@ def _workers(payload: JsonObject, item_count: int) -> int:
 
 def _parallel_map(function: Callable[[str], JsonObject], values: Iterable[str], workers: int) -> list[JsonObject]:
     ordered_values = list(values)
+
+    def checked(value: str) -> JsonObject:
+        check_execution()
+        result = function(value)
+        check_execution()
+        return result
+
     if workers == 1 or len(ordered_values) <= 1:
-        return [function(value) for value in ordered_values]
+        return [checked(value) for value in ordered_values]
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="orion-plugin") as pool:
-        return list(pool.map(function, ordered_values))
+        futures = [pool.submit(copy_context().run, checked, value) for value in ordered_values]
+        try:
+            return [future.result() for future in futures]
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
 
 
 class IocEnricherPlugin(BasePlugin):
@@ -27,7 +42,7 @@ class IocEnricherPlugin(BasePlugin):
         name="IOC Enricher",
         version="1.0.0",
         category="osint-intelligence",
-        description="Clasifica, resuelve y enriquece indicadores de compromiso con fuentes opcionales.",
+        description="Clasifica indicadores localmente; las consultas DNS y fuentes externas están bloqueadas por el perfil controlado.",
         risk_level="low",
         capabilities=("ioc-classification", "dns-resolution", "threat-intelligence"),
         requires_authorization=True,
@@ -74,11 +89,12 @@ class IocEnricherPlugin(BasePlugin):
     def run(self, payload: JsonObject, context: PluginContext) -> JsonObject:
         from orion.scripts import ioc_enricher as engine
 
+        payload = self.authorize(payload, context)
         del context
         iocs = list(dict.fromkeys(item.strip() for item in payload["iocs"] if item.strip()))
         timeout = float(payload.get("timeout", 5.0))
         external_sources = bool(payload.get("external_sources", False))
-        build = (lambda value: engine.build_record(value, timeout, allow_network=True)) if external_sources else self._local_record
+        build = (lambda value: engine.build_record(value, remaining_timeout(timeout), allow_network=True)) if external_sources else self._local_record
         items = _parallel_map(build, iocs, _workers(payload, len(iocs)))
         return {"tool": "ioc_enricher", "count": len(items), "items": items}
 
@@ -91,7 +107,7 @@ class TlsPostureAuditPlugin(BasePlugin):
         category="web-network",
         description="Inspecciona negociación TLS y certificados de endpoints autorizados.",
         risk_level="low",
-        capabilities=("tls-inspection", "certificate-inventory", "expiry-monitoring"),
+        capabilities=("tls-inspection", "certificate-inventory"),
         requires_authorization=True,
         network_access=True,
         side_effects=False,
@@ -128,13 +144,16 @@ class TlsPostureAuditPlugin(BasePlugin):
     def run(self, payload: JsonObject, context: PluginContext) -> JsonObject:
         from orion.scripts import tls_posture_audit as engine
 
+        payload = self.authorize(payload, context)
         del context
         targets = list(dict.fromkeys(item.strip() for item in payload["targets"] if item.strip()))
         timeout = float(payload.get("timeout", 5.0))
 
         def audit(target: str) -> JsonObject:
             try:
-                return engine.audit_target(target, timeout)
+                return engine.audit_target(target, remaining_timeout(timeout))
+            except ExecutionCancelledError:
+                raise
             except Exception as exc:  # noqa: BLE001
                 return {"target": target, "error": str(exc), "error_type": type(exc).__name__}
 
@@ -148,7 +167,7 @@ class FindingsTicketSyncPlugin(BasePlugin):
         name="Findings Ticket Sync",
         version="1.0.0",
         category="automation-reporting",
-        description="Convierte hallazgos normalizados en planes o tickets Jira/ServiceNow.",
+        description="Convierte hallazgos en planes Jira/ServiceNow; la creación remota permanece bloqueada por el perfil controlado.",
         risk_level="medium",
         capabilities=("finding-normalization", "ticket-planning", "ticket-creation"),
         requires_authorization=True,
@@ -188,6 +207,7 @@ class FindingsTicketSyncPlugin(BasePlugin):
     def run(self, payload: JsonObject, context: PluginContext) -> JsonObject:
         from orion.scripts import findings_ticket_sync as engine
 
+        payload = self.authorize(payload, context)
         findings = payload["findings"]
         mode = str(payload.get("mode", "plan"))
         apply = bool(payload.get("apply", False))

@@ -1,770 +1,769 @@
 {
   "manifest_version": "2.0",
-  "runtime": {
-    "name": "orion-hacking-etico",
-    "version": "2.1.0",
-    "python_runtime": "not_recorded_static_catalog",
-    "minimum_python": "3.10",
-    "entry_point_group": "orion.plugins"
-  },
   "plugins": [
     {
-      "plugin_id": "findings_ticket_sync",
-      "name": "Findings Ticket Sync",
-      "version": "1.0.0",
-      "category": "automation-reporting",
-      "description": "Converts normalized security findings into dry-run plans or approved Jira and ServiceNow tickets.",
-      "risk_level": "medium",
       "capabilities": [
         "finding-normalization",
         "ticket-planning",
         "ticket-creation"
       ],
+      "category": "automation-reporting",
+      "default_timeout_seconds": 60,
+      "description": "Convierte hallazgos en planes Jira/ServiceNow; la creación remota permanece bloqueada por el perfil controlado.",
+      "homepage": null,
       "input_schema": {
-        "type": "object",
-        "required": [
-          "findings"
-        ],
         "additionalProperties": false,
         "properties": {
+          "apply": {
+            "type": "boolean"
+          },
           "findings": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 1000,
             "items": {
               "type": "object"
-            }
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "type": "array"
           },
           "mode": {
-            "type": "string",
             "enum": [
               "plan",
               "jira",
               "servicenow"
-            ]
-          },
-          "apply": {
-            "type": "boolean"
+            ],
+            "type": "string"
           }
-        }
+        },
+        "required": [
+          "findings"
+        ],
+        "type": "object"
       },
+      "integration": "native",
+      "license": null,
+      "max_timeout_seconds": 600,
+      "name": "Findings Ticket Sync",
+      "network_access": false,
       "output_schema": {
-        "type": "object",
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "created": {
+            "type": "array"
+          },
+          "items": {
+            "type": "array"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "tool": {
+            "enum": [
+              "findings_ticket_sync"
+            ],
+            "type": "string"
+          }
+        },
         "required": [
           "tool",
           "mode",
           "count",
           "items"
         ],
-        "properties": {
-          "tool": {
-            "type": "string",
-            "enum": [
-              "findings_ticket_sync"
-            ]
-          },
-          "mode": {
-            "type": "string"
-          },
-          "count": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "items": {
-            "type": "array"
-          },
-          "created": {
-            "type": "array"
-          }
-        }
+        "type": "object"
       },
+      "plugin_id": "findings_ticket_sync",
       "requires_authorization": true,
-      "network_access": false,
+      "risk_level": "medium",
       "side_effects": true,
-      "default_timeout_seconds": 60,
-      "max_timeout_seconds": 600,
       "tags": [
         "jira",
         "servicenow",
         "reporting",
         "dry-run-default"
       ],
-      "homepage": null,
-      "license": null,
-      "integration": "native"
+      "version": "1.0.0"
     },
     {
-      "plugin_id": "ioc_enricher",
-      "name": "IOC Enricher",
-      "version": "1.0.0",
-      "category": "osint-intelligence",
-      "description": "Classifies, resolves, and enriches indicators of compromise using optional threat-intelligence sources.",
-      "risk_level": "low",
       "capabilities": [
         "ioc-classification",
         "dns-resolution",
         "threat-intelligence"
       ],
+      "category": "osint-intelligence",
+      "default_timeout_seconds": 30,
+      "description": "Clasifica indicadores localmente; las consultas DNS y fuentes externas están bloqueadas por el perfil controlado.",
+      "homepage": null,
       "input_schema": {
-        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "external_sources": {
+            "type": "boolean"
+          },
+          "iocs": {
+            "items": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "timeout": {
+            "maximum": 30,
+            "minimum": 0.1,
+            "type": "number"
+          },
+          "workers": {
+            "maximum": 32,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
         "required": [
           "iocs"
         ],
-        "additionalProperties": false,
-        "properties": {
-          "iocs": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 500,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 2048
-            }
-          },
-          "timeout": {
-            "type": "number",
-            "minimum": 0.1,
-            "maximum": 30
-          },
-          "workers": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 32
-          },
-          "external_sources": {
-            "type": "boolean"
-          }
-        }
+        "type": "object"
       },
+      "integration": "native",
+      "license": null,
+      "max_timeout_seconds": 300,
+      "name": "IOC Enricher",
+      "network_access": true,
       "output_schema": {
-        "type": "object",
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items": {
+            "type": "array"
+          },
+          "tool": {
+            "enum": [
+              "ioc_enricher"
+            ],
+            "type": "string"
+          }
+        },
         "required": [
           "tool",
           "count",
           "items"
         ],
-        "properties": {
-          "tool": {
-            "type": "string",
-            "enum": [
-              "ioc_enricher"
-            ]
-          },
-          "count": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "items": {
-            "type": "array"
-          }
-        }
+        "type": "object"
       },
+      "plugin_id": "ioc_enricher",
       "requires_authorization": true,
-      "network_access": true,
+      "risk_level": "low",
       "side_effects": false,
-      "default_timeout_seconds": 30,
-      "max_timeout_seconds": 300,
       "tags": [
         "ioc",
         "osint",
         "defensive",
         "json-first"
       ],
-      "homepage": null,
-      "license": null,
-      "integration": "native"
+      "version": "1.0.0"
     },
     {
-      "plugin_id": "osint_spy",
-      "name": "OSINT-SPY",
-      "version": "1.0.0",
-      "category": "osint-aggregation",
-      "description": "Runs the legacy OSINT-SPY public-data modes through a constrained adapter.",
-      "risk_level": "medium",
       "capabilities": [
         "domain-lookup",
         "email-lookup",
         "ip-lookup",
         "device-lookup"
       ],
+      "category": "osint-aggregation",
+      "default_timeout_seconds": 120,
+      "description": "Runs the legacy OSINT-SPY public-data modes through a constrained adapter.",
+      "homepage": "https://github.com/SharadKumar97/OSINT-SPY",
       "input_schema": {
-        "type": "object",
-        "required": [
-          "target_type",
-          "value"
-        ],
         "additionalProperties": false,
         "properties": {
           "target_type": {
-            "type": "string",
             "enum": [
               "domain",
               "email",
               "ip",
               "device"
-            ]
-          },
-          "value": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 512
+            ],
+            "type": "string"
           },
           "timeout_seconds": {
-            "type": "number",
+            "maximum": 600,
             "minimum": 1,
-            "maximum": 600
+            "type": "number"
+          },
+          "value": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
           }
-        }
+        },
+        "required": [
+          "target_type",
+          "value"
+        ],
+        "type": "object"
       },
+      "integration": "subprocess",
+      "license": "GPL-3.0",
+      "max_timeout_seconds": 600,
+      "name": "OSINT-SPY",
+      "network_access": true,
       "output_schema": {
-        "type": "object",
+        "properties": {
+          "artifacts": {
+            "type": "object"
+          },
+          "execution": {
+            "type": "object"
+          },
+          "result": {},
+          "tool": {
+            "type": "string"
+          }
+        },
         "required": [
           "tool",
           "result"
         ],
-        "properties": {
-          "tool": {
-            "type": "string"
-          },
-          "result": {},
-          "execution": {
-            "type": "object"
-          },
-          "artifacts": {
-            "type": "object"
-          }
-        }
+        "type": "object"
       },
+      "plugin_id": "osint_spy",
       "requires_authorization": true,
-      "network_access": true,
+      "risk_level": "medium",
       "side_effects": false,
-      "default_timeout_seconds": 120,
-      "max_timeout_seconds": 600,
       "tags": [
         "osint",
         "legacy",
         "external-adapter"
       ],
-      "homepage": "https://github.com/SharadKumar97/OSINT-SPY",
-      "license": "GPL-3.0",
-      "integration": "subprocess"
+      "version": "1.0.0"
     },
     {
-      "plugin_id": "phoneinfoga",
-      "name": "PhoneInfoga",
-      "version": "1.0.0",
-      "category": "osint-phone",
-      "description": "Normalizes authorized PhoneInfoga scans of international telephone numbers.",
-      "risk_level": "medium",
       "capabilities": [
         "phone-validation",
         "country-inference",
         "public-number-recon"
       ],
+      "category": "osint-phone",
+      "default_timeout_seconds": 120,
+      "description": "Normalizes authorized PhoneInfoga scans of international telephone numbers.",
+      "homepage": "https://github.com/sundowndev/phoneinfoga",
       "input_schema": {
-        "type": "object",
-        "required": [
-          "number"
-        ],
         "additionalProperties": false,
         "properties": {
           "number": {
-            "type": "string",
-            "pattern": "^\\+?[0-9 ()-]{6,32}$"
+            "pattern": "^\\+?[0-9 ()-]{6,32}$",
+            "type": "string"
           },
           "timeout_seconds": {
-            "type": "number",
+            "maximum": 600,
             "minimum": 1,
-            "maximum": 600
+            "type": "number"
           }
-        }
+        },
+        "required": [
+          "number"
+        ],
+        "type": "object"
       },
+      "integration": "subprocess",
+      "license": "GPL-3.0",
+      "max_timeout_seconds": 600,
+      "name": "PhoneInfoga",
+      "network_access": true,
       "output_schema": {
-        "type": "object",
+        "properties": {
+          "artifacts": {
+            "type": "object"
+          },
+          "execution": {
+            "type": "object"
+          },
+          "result": {},
+          "tool": {
+            "type": "string"
+          }
+        },
         "required": [
           "tool",
           "result"
         ],
-        "properties": {
-          "tool": {
-            "type": "string"
-          },
-          "result": {},
-          "execution": {
-            "type": "object"
-          },
-          "artifacts": {
-            "type": "object"
-          }
-        }
+        "type": "object"
       },
+      "plugin_id": "phoneinfoga",
       "requires_authorization": true,
-      "network_access": true,
+      "risk_level": "medium",
       "side_effects": false,
-      "default_timeout_seconds": 120,
-      "max_timeout_seconds": 600,
       "tags": [
         "osint",
         "phone",
         "external-adapter"
       ],
-      "homepage": "https://github.com/sundowndev/phoneinfoga",
-      "license": "GPL-3.0",
-      "integration": "subprocess"
+      "version": "1.0.0"
     },
     {
-      "plugin_id": "photon",
-      "name": "Photon",
-      "version": "1.0.0",
-      "category": "osint-web",
-      "description": "Crawls an authorized web target and normalizes public URLs, emails, files, and profiles.",
-      "risk_level": "medium",
       "capabilities": [
         "web-crawling",
         "url-extraction",
         "email-extraction",
         "file-discovery"
       ],
+      "category": "osint-web",
+      "default_timeout_seconds": 180,
+      "description": "Crawls an authorized web target and normalizes public URLs, emails, files, and profiles.",
+      "homepage": "https://github.com/s0md3v/Photon",
       "input_schema": {
-        "type": "object",
-        "required": [
-          "url"
-        ],
         "additionalProperties": false,
         "properties": {
-          "url": {
-            "type": "string",
-            "pattern": "^https?://",
-            "maxLength": 2048
+          "delay": {
+            "maximum": 30,
+            "minimum": 0,
+            "type": "number"
           },
           "depth": {
-            "type": "integer",
+            "maximum": 5,
             "minimum": 1,
-            "maximum": 5
-          },
-          "threads": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 20
-          },
-          "delay": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 30
-          },
-          "request_timeout": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 60
+            "type": "integer"
           },
           "only_urls": {
             "type": "boolean"
           },
-          "timeout_seconds": {
-            "type": "number",
+          "request_timeout": {
+            "maximum": 60,
             "minimum": 1,
-            "maximum": 900
+            "type": "number"
+          },
+          "threads": {
+            "maximum": 20,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "timeout_seconds": {
+            "maximum": 900,
+            "minimum": 1,
+            "type": "number"
+          },
+          "url": {
+            "maxLength": 2048,
+            "pattern": "^https?://",
+            "type": "string"
           }
-        }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
       },
+      "integration": "subprocess",
+      "license": "GPL-3.0",
+      "max_timeout_seconds": 900,
+      "name": "Photon",
+      "network_access": true,
       "output_schema": {
-        "type": "object",
+        "properties": {
+          "artifacts": {
+            "type": "object"
+          },
+          "execution": {
+            "type": "object"
+          },
+          "result": {},
+          "tool": {
+            "type": "string"
+          }
+        },
         "required": [
           "tool",
           "result"
         ],
-        "properties": {
-          "tool": {
-            "type": "string"
-          },
-          "result": {},
-          "execution": {
-            "type": "object"
-          },
-          "artifacts": {
-            "type": "object"
-          }
-        }
+        "type": "object"
       },
+      "plugin_id": "photon",
       "requires_authorization": true,
-      "network_access": true,
+      "risk_level": "medium",
       "side_effects": false,
-      "default_timeout_seconds": 180,
-      "max_timeout_seconds": 900,
       "tags": [
         "osint",
         "crawler",
         "web",
         "external-adapter"
       ],
-      "homepage": "https://github.com/s0md3v/Photon",
-      "license": "GPL-3.0",
-      "integration": "subprocess"
+      "version": "1.0.0"
     },
     {
-      "plugin_id": "sherlock",
-      "name": "Sherlock",
-      "version": "1.0.0",
-      "category": "osint-identity",
-      "description": "Checks public username presence across configured public services.",
-      "risk_level": "medium",
       "capabilities": [
         "username-enumeration",
         "public-profile-discovery"
       ],
+      "category": "osint-identity",
+      "default_timeout_seconds": 180,
+      "description": "Checks public username presence across configured public services.",
+      "homepage": "https://github.com/sherlock-project/sherlock",
       "input_schema": {
-        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "request_timeout": {
+            "maximum": 60,
+            "minimum": 1,
+            "type": "number"
+          },
+          "sites": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 300,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "timeout_seconds": {
+            "maximum": 900,
+            "minimum": 1,
+            "type": "number"
+          },
+          "usernames": {
+            "items": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
         "required": [
           "usernames"
         ],
-        "additionalProperties": false,
-        "properties": {
-          "usernames": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 100,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 64
-            }
-          },
-          "sites": {
-            "type": "array",
-            "maxItems": 300,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            }
-          },
-          "request_timeout": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 60
-          },
-          "timeout_seconds": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 900
-          }
-        }
+        "type": "object"
       },
+      "integration": "subprocess",
+      "license": "MIT",
+      "max_timeout_seconds": 900,
+      "name": "Sherlock",
+      "network_access": true,
       "output_schema": {
-        "type": "object",
+        "properties": {
+          "artifacts": {
+            "type": "object"
+          },
+          "execution": {
+            "type": "object"
+          },
+          "result": {},
+          "tool": {
+            "type": "string"
+          }
+        },
         "required": [
           "tool",
           "result"
         ],
-        "properties": {
-          "tool": {
-            "type": "string"
-          },
-          "result": {},
-          "execution": {
-            "type": "object"
-          },
-          "artifacts": {
-            "type": "object"
-          }
-        }
+        "type": "object"
       },
+      "plugin_id": "sherlock",
       "requires_authorization": true,
-      "network_access": true,
+      "risk_level": "medium",
       "side_effects": false,
-      "default_timeout_seconds": 180,
-      "max_timeout_seconds": 900,
       "tags": [
         "osint",
         "username",
         "external-adapter"
       ],
-      "homepage": "https://github.com/sherlock-project/sherlock",
-      "license": "MIT",
-      "integration": "subprocess"
+      "version": "1.0.0"
     },
     {
-      "plugin_id": "spiderfoot",
-      "name": "SpiderFoot",
-      "version": "1.0.0",
-      "category": "osint-automation",
-      "description": "Controls an authorized SpiderFoot service and returns normalized scan data.",
-      "risk_level": "medium",
       "capabilities": [
         "scan-start",
         "scan-list",
         "scan-results"
       ],
+      "category": "osint-automation",
+      "default_timeout_seconds": 60,
+      "description": "Controls an authorized SpiderFoot service and returns normalized scan data.",
+      "homepage": "https://github.com/smicallef/spiderfoot",
       "input_schema": {
-        "type": "object",
-        "required": [
-          "operation"
-        ],
         "additionalProperties": false,
         "properties": {
+          "modules": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 250,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
           "operation": {
-            "type": "string",
             "enum": [
               "start",
               "list",
               "results",
               "summary"
-            ]
-          },
-          "server_url": {
-            "type": "string",
-            "pattern": "^https?://",
-            "maxLength": 2048
-          },
-          "target": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2048
+            ],
+            "type": "string"
           },
           "scan_id": {
-            "type": "string",
+            "maxLength": 128,
             "minLength": 1,
-            "maxLength": 128
+            "type": "string"
           },
-          "name": {
-            "type": "string",
+          "server_url": {
+            "maxLength": 2048,
+            "pattern": "^https?://",
+            "type": "string"
+          },
+          "target": {
+            "maxLength": 2048,
             "minLength": 1,
-            "maxLength": 128
-          },
-          "use_case": {
-            "type": "string",
-            "maxLength": 128
-          },
-          "modules": {
-            "type": "array",
-            "maxItems": 250,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            }
-          },
-          "types": {
-            "type": "array",
-            "maxItems": 250,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            }
+            "type": "string"
           },
           "timeout_seconds": {
-            "type": "number",
+            "maximum": 600,
             "minimum": 1,
-            "maximum": 600
+            "type": "number"
+          },
+          "types": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 250,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "use_case": {
+            "maxLength": 128,
+            "type": "string"
           }
-        }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
       },
+      "integration": "http-api",
+      "license": "MIT",
+      "max_timeout_seconds": 600,
+      "name": "SpiderFoot",
+      "network_access": true,
       "output_schema": {
-        "type": "object",
+        "properties": {
+          "artifacts": {
+            "type": "object"
+          },
+          "execution": {
+            "type": "object"
+          },
+          "result": {},
+          "tool": {
+            "type": "string"
+          }
+        },
         "required": [
           "tool",
           "result"
         ],
-        "properties": {
-          "tool": {
-            "type": "string"
-          },
-          "result": {},
-          "execution": {
-            "type": "object"
-          },
-          "artifacts": {
-            "type": "object"
-          }
-        }
+        "type": "object"
       },
+      "plugin_id": "spiderfoot",
       "requires_authorization": true,
-      "network_access": true,
+      "risk_level": "medium",
       "side_effects": true,
-      "default_timeout_seconds": 60,
-      "max_timeout_seconds": 600,
       "tags": [
         "osint",
         "spiderfoot",
         "service-adapter",
         "read-mostly"
       ],
-      "homepage": "https://github.com/smicallef/spiderfoot",
-      "license": "MIT",
-      "integration": "http-api"
+      "version": "1.0.0"
     },
     {
-      "plugin_id": "theharvester",
-      "name": "theHarvester",
-      "version": "1.0.0",
-      "category": "osint-reconnaissance",
-      "description": "Collects public emails, hosts, and subdomains for an authorized domain.",
-      "risk_level": "medium",
       "capabilities": [
         "email-discovery",
         "subdomain-discovery",
         "host-discovery"
       ],
+      "category": "osint-reconnaissance",
+      "default_timeout_seconds": 180,
+      "description": "Collects public emails, hosts, and subdomains for an authorized domain.",
+      "homepage": "https://github.com/laramies/theHarvester",
       "input_schema": {
-        "type": "object",
-        "required": [
-          "domain"
-        ],
         "additionalProperties": false,
         "properties": {
-          "domain": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9.-]+$",
-            "maxLength": 253
-          },
-          "sources": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 50,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "maxLength": 64
-            }
-          },
-          "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 5000
-          },
           "dns_lookup": {
             "type": "boolean"
+          },
+          "domain": {
+            "maxLength": 253,
+            "pattern": "^[A-Za-z0-9.-]+$",
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 5000,
+            "minimum": 1,
+            "type": "integer"
           },
           "quiet": {
             "type": "boolean"
           },
+          "sources": {
+            "items": {
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
           "timeout_seconds": {
-            "type": "number",
+            "maximum": 900,
             "minimum": 1,
-            "maximum": 900
+            "type": "number"
           }
-        }
+        },
+        "required": [
+          "domain"
+        ],
+        "type": "object"
       },
+      "integration": "subprocess",
+      "license": "GPL-2.0-only",
+      "max_timeout_seconds": 900,
+      "name": "theHarvester",
+      "network_access": true,
       "output_schema": {
-        "type": "object",
+        "properties": {
+          "artifacts": {
+            "type": "object"
+          },
+          "execution": {
+            "type": "object"
+          },
+          "result": {},
+          "tool": {
+            "type": "string"
+          }
+        },
         "required": [
           "tool",
           "result"
         ],
-        "properties": {
-          "tool": {
-            "type": "string"
-          },
-          "result": {},
-          "execution": {
-            "type": "object"
-          },
-          "artifacts": {
-            "type": "object"
-          }
-        }
+        "type": "object"
       },
+      "plugin_id": "theharvester",
       "requires_authorization": true,
-      "network_access": true,
+      "risk_level": "medium",
       "side_effects": false,
-      "default_timeout_seconds": 180,
-      "max_timeout_seconds": 900,
       "tags": [
         "osint",
         "domain",
         "external-adapter"
       ],
-      "homepage": "https://github.com/laramies/theHarvester",
-      "license": "GPL-2.0-only",
-      "integration": "subprocess"
+      "version": "1.0.0"
     },
     {
-      "plugin_id": "tls_posture_audit",
-      "name": "TLS Posture Audit",
-      "version": "1.0.0",
-      "category": "web-network",
-      "description": "Inspects TLS negotiation and certificate posture for explicitly authorized endpoints.",
-      "risk_level": "low",
       "capabilities": [
         "tls-inspection",
-        "certificate-inventory",
-        "expiry-monitoring"
+        "certificate-inventory"
       ],
+      "category": "web-network",
+      "default_timeout_seconds": 30,
+      "description": "Inspecciona negociación TLS y certificados de endpoints autorizados.",
+      "homepage": null,
       "input_schema": {
-        "type": "object",
-        "required": [
-          "targets"
-        ],
         "additionalProperties": false,
         "properties": {
           "targets": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 500,
-            "uniqueItems": true,
             "items": {
-              "type": "string",
+              "maxLength": 255,
               "minLength": 1,
-              "maxLength": 255
-            }
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
           },
           "timeout": {
-            "type": "number",
+            "maximum": 30,
             "minimum": 0.1,
-            "maximum": 30
+            "type": "number"
           },
           "workers": {
-            "type": "integer",
+            "maximum": 32,
             "minimum": 1,
-            "maximum": 32
+            "type": "integer"
           }
-        }
+        },
+        "required": [
+          "targets"
+        ],
+        "type": "object"
       },
+      "integration": "native",
+      "license": null,
+      "max_timeout_seconds": 300,
+      "name": "TLS Posture Audit",
+      "network_access": true,
       "output_schema": {
-        "type": "object",
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items": {
+            "type": "array"
+          },
+          "tool": {
+            "enum": [
+              "tls_posture_audit"
+            ],
+            "type": "string"
+          }
+        },
         "required": [
           "tool",
           "count",
           "items"
         ],
-        "properties": {
-          "tool": {
-            "type": "string",
-            "enum": [
-              "tls_posture_audit"
-            ]
-          },
-          "count": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "items": {
-            "type": "array"
-          }
-        }
+        "type": "object"
       },
+      "plugin_id": "tls_posture_audit",
       "requires_authorization": true,
-      "network_access": true,
+      "risk_level": "low",
       "side_effects": false,
-      "default_timeout_seconds": 30,
-      "max_timeout_seconds": 300,
       "tags": [
         "tls",
         "certificate",
         "defensive",
         "read-only"
       ],
-      "homepage": null,
-      "license": null,
-      "integration": "native"
+      "version": "1.0.0"
     }
-  ]
+  ],
+  "runtime": {
+    "entry_point_group": "orion.plugins",
+    "minimum_python": "3.10",
+    "name": "orion-hacking-etico",
+    "python_runtime": "not_recorded_static_catalog",
+    "version": "2.1.1"
+  }
 }

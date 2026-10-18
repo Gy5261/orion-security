@@ -1,0 +1,307 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T05:31:13.257974+00:00",
+  "repository": "https://github.com/Gy5261/orion-security",
+  "baseline_commit": "dd714dfd5e36d128a934600bb9c5a39af8b3f555",
+  "runtime_version": "2.1.1",
+  "baseline": {
+    "python": "3.12.14",
+    "mcp": "1.30.0",
+    "passed": 197,
+    "seconds": 6.24
+  },
+  "test_runs": [
+    {
+      "python": "3.10.22",
+      "operating_system": "Linux",
+      "mcp_installed": true,
+      "counts": {
+        "tests": 464,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 464
+      },
+      "seconds": 8.654,
+      "command": "python -m pytest --allow-hosts=127.0.0.1,::1 --allow-unix-socket --timeout=30 --junitxml=tests.xml",
+      "network_scope": "loopback only; no external targets"
+    },
+    {
+      "python": "3.12.14",
+      "operating_system": "Linux",
+      "mcp_installed": true,
+      "counts": {
+        "tests": 464,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 464
+      },
+      "seconds": 8.11,
+      "command": "python -m pytest --allow-hosts=127.0.0.1,::1 --allow-unix-socket --timeout=30 --junitxml=tests.xml",
+      "network_scope": "loopback only; no external targets"
+    },
+    {
+      "python": "3.10.22",
+      "operating_system": "Linux",
+      "mcp_installed": false,
+      "counts": {
+        "tests": 377,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 6,
+        "passed": 371
+      },
+      "seconds": 1.766,
+      "command": "python -m pytest --allow-hosts=127.0.0.1,::1 --allow-unix-socket --timeout=30 --junitxml=tests.xml",
+      "network_scope": "loopback only; no external targets"
+    }
+  ],
+  "development_environment_python312": {
+    "mcp": "1.30.0",
+    "pytest": "9.1.1",
+    "pytest-socket": "0.8.1",
+    "pytest-timeout": "2.4.0",
+    "starlette": "1.8.0",
+    "anyio": "4.15.1",
+    "httpx": "0.28.1",
+    "pydantic": "2.14.1",
+    "ruff": "0.17.1",
+    "mypy": "2.4.0",
+    "build": "1.6.1",
+    "setuptools": "84.0.0",
+    "wheel": "0.48.0",
+    "jsonschema": "4.26.0",
+    "pip": "26.2.1",
+    "pip-audit": "2.10.1",
+    "bandit": "1.9.4"
+  },
+  "source_gates": [
+    {
+      "name": "lint",
+      "status": "passed",
+      "command": "python -m ruff check orion tools tests .github/scripts"
+    },
+    {
+      "name": "typing",
+      "status": "passed",
+      "source_files_checked": 37,
+      "command": "python -m mypy orion",
+      "scope": "Typed core; legacy scripts and optional SDK excluded in mypy configuration"
+    },
+    {
+      "name": "compile",
+      "status": "passed",
+      "command": "python -m compileall -q orion tools tests .github/scripts"
+    },
+    {
+      "name": "contracts",
+      "status": "passed",
+      "command": "python tools/validate_repository.py"
+    },
+    {
+      "name": "installed_dependency_consistency",
+      "status": "passed",
+      "command": "python -m pip check"
+    },
+    {
+      "name": "shell_bootstrap",
+      "status": "passed",
+      "commands": [
+        "bash -n orion/scripts/install-safe-tooling.sh",
+        "bash orion/scripts/install-safe-tooling.sh --plan --category core"
+      ],
+      "installs_tools": false
+    },
+    {
+      "name": "isolated_scripts",
+      "status": "passed",
+      "command": "python orion/scripts/run_skill_sanity.py",
+      "checks": {
+        "total_tests": 6,
+        "passed": 6,
+        "failed": 0,
+        "checks_passed_percentage": 100.0
+      },
+      "documents_checked": 65,
+      "broken_local_references": 0
+    }
+  ],
+  "runtime_doctor": {
+    "ok": true,
+    "plugin_count": 9,
+    "available_plugins": 4,
+    "optional_unavailable": 5,
+    "discovery_errors": [],
+    "note": "Availability describes local adapter prerequisites, not permission to contact targets or the health of a remote service."
+  },
+  "dependency_audit": {
+    "tool": "pip-audit",
+    "version": "2.10.1",
+    "status": "passed",
+    "third_party_distributions": 75,
+    "known_advisory_records": 0,
+    "command": "python -m pip_audit --no-deps --disable-pip --strict --progress-spinner off --format json --output audit.json -r third-party-requirements.txt",
+    "requirement_selection": "Exact installed Name==Version for every distribution except the local ORION project. Includes development and audit tools.",
+    "pip_version": "26.2.1",
+    "limitation": "No known advisories for the queried versions at validation time; this is not proof of absence of vulnerabilities."
+  },
+  "bandit_review": {
+    "tool_version": "1.9.4",
+    "command": "python -m bandit -r orion -f json -o bandit.json",
+    "severity_counts": {
+      "LOW": 9,
+      "MEDIUM": 0,
+      "HIGH": 0
+    },
+    "test_ids": {
+      "B404": 3,
+      "B603": 2,
+      "B110": 4
+    },
+    "disposition": "Low findings retained and reviewed: controlled subprocess use and error-handling fallbacks. No blanket suppressions added."
+  },
+  "remote_ci": {
+    "status_at_local_validation": "awaiting_followup_run_after_windows_metadata_fix",
+    "configured_matrix": [
+      {
+        "os": "ubuntu-24.04",
+        "python": "3.10"
+      },
+      {
+        "os": "ubuntu-24.04",
+        "python": "3.12"
+      },
+      {
+        "os": "ubuntu-24.04",
+        "python": "3.14"
+      },
+      {
+        "os": "ubuntu-24.04",
+        "python": "3.15"
+      },
+      {
+        "os": "windows-2025",
+        "python": "3.12"
+      },
+      {
+        "os": "windows-2025",
+        "python": "3.15"
+      }
+    ],
+    "evidence_policy": "Consult the pull request Actions runs for actual remote results. Matrix entries do not imply successful execution. Windows was not executed locally.",
+    "pull_request": "https://github.com/Gy5261/orion-security/pull/10",
+    "first_run": {
+      "commit": "f792db35931ca984a092c19b14de5245ff68123b",
+      "url": "https://github.com/Gy5261/orion-security/actions/runs/39100565070",
+      "linux_test_jobs": "passed on 3.10.22, 3.12.15, 3.14.8, 3.15.0",
+      "quality_package_core_jobs": "passed",
+      "windows_test_jobs": "three failures each on 3.12.10 and 3.15.0; identical artifact metadata cause",
+      "correction": "Use complete os.stat metadata without following links on the path traversal branch; preserve descriptor-based POSIX traversal and hardlink rejection.",
+      "additional_regression": "Charge bytes consumed by truncated artifact reads. The aggregate bound includes one overflow sentinel, even with multiple growing files.",
+      "dependency_review_url": "https://github.com/Gy5261/orion-security/actions/runs/39100565080",
+      "dependency_review_status": "passed; dependency declarations unchanged by the followup"
+    }
+  },
+  "limits": [
+    "External binaries remain trusted local code, without global memory/disk or network isolation.",
+    "Native Python cancellation is cooperative.",
+    "The service is local and does not implement multiuser OAuth authentication.",
+    "OSINT online and remote ticket creation remain denied by the controlled profile.",
+    "Third-party tools were exercised with fakes, not live external assessments.",
+    "TLS metadata is not PKI trust verification."
+  ],
+  "packaging": {
+    "status": "passed",
+    "operating_system": "Linux",
+    "build": {
+      "python": "3.12.14",
+      "frontend": {
+        "name": "build",
+        "version": "1.6.1"
+      },
+      "backend": {
+        "name": "setuptools",
+        "version": "84.0.0"
+      },
+      "wheel_version": "0.48.0",
+      "source_date_epoch": 1791788685,
+      "command": "SOURCE_DATE_EPOCH=1791788685 python -m build --no-isolation --outdir dist",
+      "wheel_built_from_sdist": true
+    },
+    "archive_checks": {
+      "status": "passed",
+      "wheel_entries": 91,
+      "sdist_entries": 183,
+      "sdist_validation_record_included": true,
+      "required_wheel_resources": [
+        "orion/SKILL.md",
+        "orion/ARCHITECTURE.md",
+        "orion/references/00-index.md",
+        "orion/playbooks/01-authorized-assessment-playbook.md",
+        "orion/scripts/install-safe-tooling.sh",
+        "orion/scripts/install-safe-tooling.ps1"
+      ],
+      "shared_io_modules_included": [
+        "orion/fileio.py",
+        "orion/jsonio.py"
+      ],
+      "compiled_python_and_private_key_database_extensions_absent": true
+    },
+    "installation_checks": [
+      {
+        "status": "passed",
+        "runtime_version": "2.1.1",
+        "python": "3.12.14",
+        "catalog_resources": 85,
+        "offline_iocs": 2,
+        "pip_check": "passed",
+        "isolated_imports": true,
+        "smoke_working_directory": "temporary directory outside the checkout",
+        "artifact": "wheel",
+        "environment": "clean base virtual environment",
+        "mcp_installed": false,
+        "pip_version": "25.0.1",
+        "install_command": "python -m pip install --disable-pip-version-check --no-cache-dir --no-index --no-deps dist/orion_hacking_etico-2.1.1-py3-none-any.whl",
+        "smoke_command": "python -I .github/scripts/smoke_install.py --expect-mcp absent"
+      },
+      {
+        "status": "passed",
+        "runtime_version": "2.1.1",
+        "python": "3.12.14",
+        "catalog_resources": 85,
+        "offline_iocs": 2,
+        "pip_check": "passed",
+        "isolated_imports": true,
+        "smoke_working_directory": "temporary directory outside the checkout",
+        "artifact": "sdist",
+        "environment": "existing development environment with SDK retained",
+        "mcp_installed": true,
+        "mcp_version": "1.30.0",
+        "pip_version": "26.2.1",
+        "install_command": "python -m pip install --disable-pip-version-check --no-cache-dir --no-index --no-deps --no-build-isolation --force-reinstall dist/orion_hacking_etico-2.1.1.tar.gz",
+        "smoke_command": "python -I .github/scripts/smoke_install.py --expect-mcp present"
+      },
+      {
+        "status": "passed",
+        "runtime_version": "2.1.1",
+        "python": "3.12.14",
+        "catalog_resources": 85,
+        "offline_iocs": 2,
+        "pip_check": "passed",
+        "isolated_imports": true,
+        "smoke_working_directory": "temporary directory outside the checkout",
+        "artifact": "wheel[mcp]",
+        "environment": "existing development environment with SDK retained",
+        "mcp_installed": true,
+        "mcp_version": "1.30.0",
+        "pip_version": "26.2.1",
+        "install_command": "python -m pip install --disable-pip-version-check --no-cache-dir --no-index --no-deps --force-reinstall \"dist/orion_hacking_etico-2.1.1-py3-none-any.whl[mcp]\"",
+        "smoke_command": "python -I .github/scripts/smoke_install.py --expect-mcp present"
+      }
+    ],
+    "command_path_policy": "Commands use portable relative artifact paths and the relevant virtual-environment Python.",
+    "network_scope": "Artifact installation uses no package index; smoke checks contact no external targets.",
+    "base_bootstrap_note": "The clean base environment inherits ensurepip pip 25.0.1 and is used only for offline artifact installation. This packaging check is not a vulnerability audit of that bootstrap. The separately audited development environment uses pip 26.2.1."
+  }
+}

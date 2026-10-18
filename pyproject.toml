@@ -1,20 +1,20 @@
 [build-system]
-requires = ["setuptools>=68,<81", "wheel>=0.43,<1"]
+requires = ["setuptools>=78.1.1,<85", "wheel>=0.43,<1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "orion-hacking-etico"
-version = "2.1.0"
+version = "2.1.1"
 description = "Universal MCP and plugin runtime for authorized defensive security and OSINT"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = []
 keywords = ["cybersecurity", "ethical-hacking", "plugins", "mcp", "osint", "defensive-security"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Information Technology",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -41,31 +41,52 @@ phoneinfoga = "orion.plugins.osint:PhoneInfogaPlugin"
 photon = "orion.plugins.osint:PhotonPlugin"
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.27,<2"]
+mcp = ["mcp>=1.30,<2"]
 dev = [
   "build>=1.2,<2",
+  "jsonschema>=4.23,<5",
   "mypy>=2.4,<3",
   "pytest>=8,<10",
+  "pytest-socket>=0.7,<1",
+  "pytest-timeout>=2.3,<3",
   "ruff>=0.17,<1",
+  "tomli>=2,<3; python_version < '3.11'",
 ]
-all = ["mcp>=1.27,<2"]
+all = ["mcp>=1.30,<2"]
 
 [project.urls]
-Homepage = "https://github.com/Gy5261/ORION-HACKING-ETICO-Y-CIBERSEGURIDAD"
-Repository = "https://github.com/Gy5261/ORION-HACKING-ETICO-Y-CIBERSEGURIDAD"
-Documentation = "https://github.com/Gy5261/ORION-HACKING-ETICO-Y-CIBERSEGURIDAD/blob/main/docs/MCP_SERVER.md"
+Homepage = "https://github.com/Gy5261/orion-security"
+Repository = "https://github.com/Gy5261/orion-security"
+Documentation = "https://github.com/Gy5261/orion-security/blob/main/docs/MCP_SERVER.md"
+Issues = "https://github.com/Gy5261/orion-security/issues"
+
+[tool.setuptools]
+include-package-data = false
 
 [tool.setuptools.packages.find]
-include = ["orion*"]
+include = ["orion", "orion.*"]
+namespaces = false
+
+# Explicitly ship the read-only catalog and both offline bootstrap scripts.
+# Repository-private files and generated assessment output are never globbed in.
+[tool.setuptools.package-data]
+orion = [
+  "*.md",
+  "references/*.md",
+  "references/*.txt",
+  "playbooks/*.md",
+  "agents/*.yaml",
+  "scripts/*.sh",
+  "scripts/*.ps1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers --disable-warnings"
+addopts = "-q --strict-config --strict-markers"
 
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-exclude = ["orion/scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]

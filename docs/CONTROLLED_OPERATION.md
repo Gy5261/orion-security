@@ -1,138 +1,102 @@
-# Operación controlada de ORION
+# Operación controlada de ORION Security
 
-## 1. Perímetro y propósito
+## 1. Perímetro
 
-Este perfil reduce operaciones involuntarias desde `OrionRuntime`, la CLI `orion plugins run` y el servidor MCP. No convierte todos los archivos de este repositorio en un sandbox. El administrador local, la instalación Python y los directorios publicados deben ser confiables. No conceda a un agente acceso de escritura al código, al archivo de aprobación, al directorio de auditoría o al entorno del proceso.
+El perfil se aplica a `OrionRuntime`, `orion plugins run`, `orion_run_plugin` en MCP y las llamadas directas a `.run()` de los plugins incorporados. El operador local controla la instalación, los plugins y los directorios publicados. No conceda escritura sobre el código, la aprobación o la base de cuotas a un agente que sólo deba consumir herramientas.
 
-La ruta normal es: preparar datos sintéticos, analizar offline, revisar el alcance, obtener aprobación fuera del agente, ejecutar una solicitud pequeña y conservar evidencia mínima. Cuando no existe una necesidad concreta de red, mantenga la operación offline.
+Las APIs Python de bajo nivel son utilidades para integraciones de confianza. Llamarlas directamente no equivale a pasar por la política del runtime. El aislamiento frente a código hostil corresponde al sistema operativo.
 
-## 2. Matriz efectiva de operaciones
+## 2. Matriz efectiva
 
-| Operación | Comportamiento del perfil |
+| Operación | Permiso efectivo |
 |---|---|
-| Consultar herramientas, documentación, prompts y diagnóstico | Lectura local; no concede permisos |
-| Clasificar IOCs que son únicamente IP literales o hashes | Admitido con referencia y sin fuentes externas; no DNS |
-| Resolver dominios o usar fuentes externas de IOCs | Denegado |
-| Preparar planes de tickets | Admitido con referencia; no crea tickets |
-| Crear o modificar tickets | Denegado incluso con flags de permiso |
-| Ejecutar adaptadores OSINT online | Denegado aunque el ejecutable esté instalado |
-| Inspección TLS de laboratorio | Requiere todos los controles indicados abajo |
-| Importar entry points Python de terceros | Desactivado por defecto; opt-in solo para integración de código confiable |
+| Documentación, manifiestos y diagnóstico | Lectura local |
+| Clasificar IP, dominio, URL o hash con fuentes externas desactivadas | Referencia de trabajo; sin DNS de objetivos |
+| Resolver objetivos o enriquecer desde servicios externos | Denegado por el perfil |
+| Preparar planes de tickets | Admitido con referencia |
+| Crear tickets o modificar servicios | Denegado, incluso con flags |
+| Ejecutar herramientas OSINT online | Denegado, aunque estén instaladas |
+| Sonda TLS de laboratorio | Aprobación exacta, permiso de red y cuota |
+| Importar plugins Python externos | Desactivado por defecto; decisión del integrador confiable |
 
-Los nueve contratos de plugins describen capacidades de los adaptadores, no un permiso de ejecución. `health.available=true` indica disponibilidad de una implementación o dependencia, no autorización ni verificación de conectividad con un servicio.
+Los metadatos describen interfaces; no conceden autorización. `health.available` sólo informa disponibilidad local de la implementación o su configuración.
 
-## 3. Preparar el entorno antes de cualquier sonda
-
-Use una máquina virtual o entorno equivalente dedicado, sin credenciales de producción, con una instantánea recuperable y datos sintéticos. El responsable debe comprobar las rutas, interfaces, DNS, VPN, proxies y firewall. Para trabajo offline, suprima la salida de red al nivel del sistema operativo. Para TLS de laboratorio, limite la salida a las direcciones y puertos exactos de las máquinas de prueba.
-
-La política Python no configura ni inspecciona ese aislamiento. `lab_preflight` y las herramientas MCP devuelven `isolation_verified=false` deliberadamente. No clasifique un segmento corporativo como laboratorio por usar direcciones RFC1918. No use redes compartidas, producción, dispositivos médicos, sistemas industriales ni activos de terceros para estos ejemplos.
-
-Conserve aprobaciones y auditoría fuera del árbol publicado, en un directorio del operador sin escritores no confiables. En POSIX, la aprobación y la base SQLite requieren permisos exclusivos del propietario, normalmente `0600`; el directorio debería ser `0700`. En Windows debe aplicar y revisar ACL del usuario y del servicio: las comprobaciones POSIX no sustituyen las ACL de Windows. No se ha ejecutado una validación Windows de esta revisión.
-
-## 4. Solicitud exacta y preflight
-
-El ejemplo `samples/controlled/tls-request.json` contiene una única dirección loopback. No inicia un servidor TLS ni prueba que alguien sea dueño del servicio.
+## 3. Trabajo offline
 
 ```bash
-python -c "import json; from pathlib import Path; from orion.controls import lab_preflight; print(lab_preflight(json.loads(Path('samples/controlled/tls-request.json').read_text())))"
-python -c "import json; from pathlib import Path; from orion.controls import request_fingerprint; print(request_fingerprint('tls_posture_audit', json.loads(Path('samples/controlled/tls-request.json').read_text())))"
+orion plugins run ioc_enricher --input samples/controlled/offline-iocs.json --authorization LOCAL-CLASSIFICATION-001
 ```
 
-La alternativa MCP es `orion_request_review`. El resultado contiene la huella, pero siempre `authorization_granted=false`. La herramienta no crea archivos de permiso ni puede aprobar la solicitud.
+La entrada IOC acepta hasta 500 cadenas, de 1 a 2.048 caracteres. El JSON debe cumplir el presupuesto general: 1 MiB, profundidad 32 y 20.000 nodos contando claves. Las rutas CLI leen archivos regulares; también se admite `--input -` para stdin.
 
-La huella incluye el identificador del plugin y el payload completo en JSON canónico. Cambiar un destino, puerto, timeout, número de trabajadores o un valor por defecto escrito explícitamente exige otra revisión. El orden de claves de un objeto no cambia la huella; el orden de las listas sí.
+Las salidas declaran si fueron sólo clasificación y si hubo consulta DNS del indicador. Un hash reconocido por longitud no demuestra que pertenezca a malware. Los resultados de cabeceras HTTP son observaciones de configuración; los scores heurísticos de hallazgos no se presentan como CVSS verificado.
 
-Límites TLS: entre 1 y 16 destinos; IPv4 literal loopback o RFC1918; puertos de 1 a 65535; de 1 a 4 trabajadores; timeout por conexión de 0,1 a 10 segundos. Se rechazan nombres DNS, URLs, notaciones IPv6, direcciones públicas y direcciones terminadas en 0 o 255 por precaución. Esto limita capacidad, no demuestra propiedad.
+## 4. Preparación de laboratorio TLS
 
-## 5. Aprobación independiente
+El responsable debe verificar los activos, rutas e interfaces que autoriza. El perfil admite entre 1 y 16 destinos IPv4 literales loopback o RFC1918, de 1 a 4 trabajadores y timeout de socket entre 0,1 y 10 segundos. Rechaza DNS, IPv6, URLs, direcciones públicas y extremos terminados en 0/255.
 
-La plantilla `samples/controlled/approval-template.json` está revocada, caducada y contiene una huella inválida para cualquier solicitud real. Copiarla no habilita nada. Un revisor humano debe contrastar el payload con la autorización del propietario, completar los campos y provisionar el documento por un canal administrativo que el agente no controle.
+La salida TLS informa negociación, cipher y SHA-256 del certificado DER. No valida cadena de confianza ni identidad DNS y no calcula caducidad a partir de un certificado no analizado.
 
-El documento acepta exactamente estos campos:
+`orion_request_review` comprueba el payload sin contactar destinos y devuelve su huella. No crea un permiso. El SHA-256 vincula identificador del plugin y payload exacto: cambiar un valor, agregar un valor predeterminado o reordenar una lista exige nueva revisión.
 
-| Campo | Significado y control |
+## 5. Documento de aprobación
+
+Un revisor independiente del agente prepara el archivo a partir de `samples/controlled/approval-template.json`. La plantilla no autoriza una ejecución real. La aplicación exige exactamente estos campos:
+
+| Campo | Condición |
 |---|---|
 | `schema_version` | Entero 1 |
-| `authorization` | Referencia exacta del expediente, al menos 12 caracteres |
-| `actor` | Etiqueta del operador; debe coincidir con la solicitud |
-| `asset_owner` | Responsable del activo según revisión humana |
-| `approved_by` | Revisor diferente de la etiqueta del actor |
-| `purpose` | Objetivo específico del ejercicio |
-| `legal_basis_reference` | Referencia al documento revisado; no el documento ni datos sensibles |
-| `environment` | Debe ser `isolated-lab` |
-| `not_before`, `expires_at` | ISO-8601 con zona horaria; ventana máxima de 24 horas |
-| `revoked` | Debe ser el booleano `false` para admitir una solicitud |
-| `request_sha256` | SHA-256 exacto del plugin y payload |
-| `max_uses` | Entero entre 1 y 100; use 1 para una comprobación puntual |
+| `authorization` | Referencia exacta, al menos 12 caracteres |
+| `actor` | Etiqueta que coincide con la solicitud |
+| `asset_owner`, `purpose`, `legal_basis_reference` | Referencias administrativas explícitas |
+| `approved_by` | Etiqueta diferente del actor |
+| `environment` | `isolated-lab` |
+| `not_before`, `expires_at` | Fechas con zona, vigentes, ventana máxima de 24 horas |
+| `revoked` | Booleano `false` |
+| `request_sha256` | Huella exacta del plugin y payload |
+| `max_uses` | Entero entre 1 y 100 |
 
-La aplicación comprueba estructura, correspondencia, vigencia y cuota. No autentica personas, no consulta un sistema de identidad, no valida poderes de representación, no verifica firmas y no determina si la base legal es adecuada. Un administrador capaz de cambiar documentos o la base de datos permanece dentro del perímetro de confianza.
+El formato se describe en `schemas/lab-approval.schema.json`. Se rechazan claves repetidas, campos adicionales, caracteres de control y valores no finitos. Estas comprobaciones no autentican al actor ni verifican la autenticidad de documentos externos.
 
-## 6. Provisionar y ejecutar una solicitud aprobada
+## 6. Archivos privados y ejecución
 
-Ejemplo de variables en PowerShell para una aprobación ya revisada y almacenada fuera del repositorio:
+La aprobación y la base SQLite deben estar fuera del repositorio o paquete instalado, en rutas absolutas sin traversal, enlaces ni puntos de reanálisis. En POSIX deben pertenecer al usuario del proceso y tener permisos 600; los padres no pueden permitir escritura de otros usuarios salvo directorios compartidos con sticky bit. Los enlaces físicos también se rechazan. En Windows, el operador debe aplicar ACL adecuadas; los bits POSIX no equivalen a una auditoría de ACL.
+
+Variables de un operador que ya dispone de aprobación revisada:
 
 ```powershell
 $env:ORION_LAB_APPROVAL_FILE = 'C:\ORION-Private\approved-request.json'
 $env:ORION_AUDIT_DATABASE = 'C:\ORION-Private\audit.sqlite3'
 ```
 
-En POSIX se usan variables equivalentes con rutas absolutas y los permisos descritos arriba. No pase la aprobación como argumento MCP ni publique sus contenidos. `load_private_json` rechaza enlaces simbólicos, archivos no regulares, documentos excesivos y claves JSON duplicadas.
-
-Tras comprobar que existe un servicio TLS de prueba propio y que coincide la aprobación, la entrada es:
+En POSIX se configuran las mismas variables con rutas propias. No pase el contenido de la aprobación por MCP. La solicitud, una vez configurada, usa la referencia y actor exactos:
 
 ```bash
-python -m orion plugins run tls_posture_audit --input samples/controlled/tls-request.json --authorization LAB-REFERENCE-REVIEWED-001 --actor lab-operator --allow-network
+orion plugins run tls_posture_audit --input samples/controlled/tls-request.json --authorization LAB-REFERENCE-REVIEWED-001 --actor lab-operator --allow-network
 ```
 
-La referencia y el actor del ejemplo son marcadores; el documento revisado debe contener los valores reales. El comando falla de forma cerrada cuando falta aprobación, auditoría, permiso de red, vigencia o coincidencia del payload. No cambie flags para intentar sortear una denegación.
+Los valores del ejemplo son marcadores. Sin aprobación coincidente, auditoría, vigencia y cupo, el comando rechaza la operación antes de la sonda.
 
-## 7. Cupos, errores y repetición
+## 7. Cuotas y auditoría
 
-Antes de ejecutar una sonda se reserva un uso en una transacción SQLite `BEGIN IMMEDIATE`. Las ejecuciones simultáneas no pueden superar `max_uses`. Un UUID de solicitud ya consumido no se reutiliza. Una ejecución fallida puede consumir su cupo: es intencional, para no convertir reintentos en actividad ilimitada.
+La reserva de uso ocurre antes de ejecutar mediante `BEGIN IMMEDIATE` de SQLite. Varias solicitudes simultáneas no pueden consumir más de `max_uses`; un UUID consumido no se reutiliza. Una operación fallida o cancelada puede consumir su cupo, evitando reintentos ilimitados.
 
-La base registra eventos de inicio, éxito, fallo o denegación cuando puede hacerlo. No almacena el payload, los objetivos, las credenciales ni mensajes de excepción en esos eventos. El actor es una etiqueta, no identidad autenticada. El diagnóstico detallado de una operación puede ser sensible y debe permanecer bajo control del operador.
+Los eventos registran estado, plugin, UUID, etiqueta del actor y hora. No incluyen payloads, objetivos, referencias privadas ni textos de excepción. Si un registro obligatorio de inicio falla, no se ejecuta la operación. SQLite no es un registro inmutable frente al administrador; restaurar una copia también puede restaurar cuotas anteriores.
 
-No borre o restaure la base de cuotas para reactivar permisos. Una restauración puede revertir consumos. Para retomar una operación, documente la incidencia y emita una revisión nueva. La base SQLite no es inmutable frente al administrador; exportar, firmar o conservar evidencia en un sistema independiente requiere un procedimiento adicional.
+## 8. Plazos y detención
 
-El timeout lógico de `OrionRuntime` sigue siendo informativo: no mata código Python arbitrario. Los límites por socket y trabajadores reducen el trabajo TLS, pero no constituyen un deadline global duro. La aprobación caducada o revocada impide nuevas admisiones; no cancela una sonda que ya comenzó.
+Los deadlines del runtime se propagan a workers, sockets y procesos. Los adaptadores revisan cancelación y los resultados tardíos no se aceptan como éxito. Los procesos externos se limpian al finalizar, fallar o cancelarse. La ejecución Python arbitraria sólo puede detenerse cooperativamente; para interrumpirla por fuerza se necesita un supervisor o aislamiento de proceso.
 
-## 8. Detención y recuperación
+`ORION_EMERGENCY_STOP=1` bloquea nuevas ejecuciones del runtime, incluso offline. Las herramientas de documentación y diagnóstico siguen disponibles. Cambiar una variable en otra terminal no modifica el entorno de un servidor ya iniciado; la emergencia operativa debe detenerse desde su supervisor. Revocar o caducar la aprobación impide nuevas admisiones, pero no revierte trabajo ya realizado.
 
-Configure `ORION_EMERGENCY_STOP=1` en el entorno del proceso antes de admitir nuevas operaciones. El bloqueo se consulta en cada admisión y también impide operaciones offline del runtime. Las herramientas de lectura de documentación y diagnóstico siguen disponibles.
+## 9. MCP y publicación
 
-Cambiar una variable en una terminal distinta no modifica el entorno de un proceso ya iniciado. Para una detención inmediata, termine el proceso desde el supervisor del sistema y bloquee la salida de red; no espere que un cambio de archivo o variable mate operaciones en curso. Después preserve la evidencia mínima, compruebe el estado del laboratorio y obtenga otra revisión antes de reiniciar.
+MCP se limita a stdio o HTTP loopback, con validación de argumentos, Host/Origin y framing. Sus errores se redactan y la concurrencia está acotada. La guía [MCP_SERVER.md](MCP_SERVER.md) detalla las reglas y transportes.
 
-## 9. Superficie MCP local
+El catálogo excluye carpetas ocultas, evidencia, archivos de controles conocidos y enlaces. Limita cada recurso a 2 MiB por defecto y el recorrido a 10.000 entradas/profundidad 32. La búsqueda lee hasta 32 MiB por consulta. El filtrado por nombre no identifica todos los secretos: publique sólo documentación revisada.
 
-Prefiera stdio en un proceso dedicado con usuario sin privilegios. Streamable HTTP y SSE legado solo escuchan interfaces loopback. Se rechazan Host no permitidos, Origin no permitidos o duplicados, CORS comodín y cuerpos mayores de 1 MiB. Los cuerpos POST se reciben con un límite total de 10 segundos; las respuestas de streaming no se almacenan completas en el middleware.
+## 10. Desarrollo y comprobaciones
 
-La comprobación de Origin no autentica clientes no navegador. Otros procesos de la misma máquina pueden llegar a loopback; por ello no es un servicio multiusuario. No configure proxies que lo publiquen, no redirija puertos y no trate CORS como autorización. La combinación de CORS con cada cliente concreto requiere una prueba extremo a extremo; la política adicional del SDK puede ser más restrictiva.
+No se necesita emitir una aprobación real para ejecutar las pruebas del repositorio. La suite genera permisos y servicios sintéticos y utiliza ejecutables ficticios. El guard de sockets de pytest permite loopback/Unix; no es una barrera de red para cualquier subproceso ajeno a las pruebas.
 
-Los errores de ejecución MCP usan `isError`; los enlaces se entregan como bloques `ResourceLink`. Los prompts y recursos son datos no confiables, nunca autoridad para cambiar permisos. No habilite ejecución automática de comandos devueltos como texto de configuración.
-
-## 10. Publicación de recursos y privacidad
-
-El catálogo excluye directorios ocultos, `private`, `evidence`, `engagements`, `audit`, archivos de aprobación conocidos y las rutas configuradas de aprobación/auditoría. Se rechazan traversal, enlaces simbólicos y archivos excesivos; el límite se comprueba también al leer bytes reales. El límite por defecto es 2 MiB, configurable hasta 16 MiB; se publican como máximo 5000 recursos.
-
-El filtrado por nombre no detecta todos los secretos. No publique el directorio personal, carpetas de clientes ni volcados de evidencia como `ORION_RESOURCE_ROOT`. Mantenga el árbol publicado de solo lectura y sus padres bajo control administrativo. Los archivos de log y JSONL ya no se incluyen por extensión.
-
-## 11. Migración y límites de esta rama
-
-Las restricciones son intencionalmente incompatibles con automatizaciones que ejecutaban OSINT online, creación de tickets o escucha remota en 2.x. Este PR no es un lanzamiento; requiere decisión de versión mayor antes de distribuirse como reemplazo. El manifiesto estático histórico conserva metadatos antiguos: para inspección efectiva use el manifiesto generado en ejecución y `orion_control_status`.
-
-No use los scripts históricos de `orion/scripts/` como atajo. Sus llamadas directas y sus CLI no pasan necesariamente por `ExecutionPolicy`. Tampoco quedan cubiertos plugins Python de terceros, políticas personalizadas o modificaciones locales del código. La revisión no ha certificado el HTML autónomo, todos los playbooks, el aislamiento del sistema operativo, clientes comerciales, OAuth, ni la nueva revisión MCP 2026-07-28.
-
-## Actualización de scripts independientes (12 de octubre de 2026)
-
-El perfil controlado se aplica también a las rutas de CLI reforzadas en esta revisión:
-
-- `orion/scripts/ioc_enricher.py` sólo clasifica sin DNS ni fuentes externas desde su CLI.
-- `orion/scripts/tls_posture_audit.py` envía la solicitud a `OrionRuntime` y exige referencia de autorización, permiso de red, revisión exacta y cuota. El inventario de certificados produce una huella DER SHA-256, **no** valida confianza PKI ni inventa fechas de vencimiento.
-- `orion/scripts/http_surface_audit.py` inspecciona ficheros de cabeceras sin red con `--input`. El modo `--allow-loopback` sólo admite IP literales loopback y HEAD, con límites de tamaño y sin redirecciones ni proxy.
-- `orion/scripts/findings_ticket_sync.py` admite planes locales; `--apply` rechaza todas las escrituras remotas.
-- `orion/scripts/evidence_manifest.py` inventaría SHA-256 con ficheros regulares y límites; no certifica cadena de custodia.
-- Los instaladores WinGet y Linux son modo plan por defecto; aplicar requiere intervención administrativa explícita.
-- `orion/scripts/expand_markdown_docs.py` dejó de expandir documentos con escenarios sintéticos y funciona como auditor de solo lectura.
-
-Los motores Python invocados de forma directa por código de terceros continúan siendo una superficie de confianza y no constituyen sandbox del sistema operativo. No ejecutar el runtime, scripts ni adaptadores con privilegios elevados en equipos de usuarios no confiables.
-
+Consulte [arquitectura](../orion/ARCHITECTURE.md), [desarrollo](DEVELOPMENT.md) y [revisión de seguridad](SECURITY_REVIEW_2026-10-18.md) para diseño, comandos y evidencia.

@@ -19,6 +19,8 @@ import os
 import sys
 from typing import Any, Dict, Iterable, List
 
+from orion.jsonio import read_json_file
+
 
 SEVERITY_TO_PRIORITY = {
     "critical": "P1",
@@ -39,11 +41,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_findings(path: str) -> List[Dict[str, Any]]:
-    with open(path, "rb") as handle:
-        raw = handle.read(1024 * 1024 + 1)
-    if len(raw) > 1024 * 1024:
-        raise ValueError("finding input exceeds 1 MiB")
-    data = json.loads(raw)
+    data = read_json_file(path)
     if isinstance(data, dict):
         for key in ("findings", "items", "results"):
             if isinstance(data.get(key), list):
@@ -91,6 +89,8 @@ def description_for(finding: Dict[str, Any]) -> str:
 
 
 def build_plan(findings: Iterable[Dict[str, Any]], mode: str) -> List[Dict[str, Any]]:
+    if mode not in {"plan", "jira", "servicenow"}:
+        raise ValueError("unsupported ticket plan mode")
     plan = []
     for finding in findings:
         severity = normalize_severity(finding)
@@ -148,10 +148,6 @@ def main() -> int:
         findings = load_findings(args.input)
         plan = build_plan(findings, args.mode)
         payload: Dict[str, Any] = {"mode": args.mode, "count": len(plan), "items": plan}
-        if args.apply and args.mode == "jira":
-            payload["created"] = apply_jira(plan)
-        elif args.apply and args.mode == "servicenow":
-            payload["created"] = apply_servicenow(plan)
         write_output(payload, args.output)
         return 0
     except Exception as exc:  # noqa: BLE001

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import json
 import math
 import os
 import re
@@ -17,8 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-MAX_DOCUMENT_BYTES = 1024 * 1024
-MAX_DEPTH = 32
+from orion.fileio import is_link, open_regular
+from orion.jsonio import MAX_DEPTH as MAX_DEPTH
+from orion.jsonio import MAX_DOCUMENT_BYTES, canonical_json, loads_json
+
 LAB_NETWORKS = tuple(ipaddress.ip_network(item) for item in (
     "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
 ))
@@ -26,41 +27,6 @@ LAB_NETWORKS = tuple(ipaddress.ip_network(item) for item in (
 
 class ControlDenied(PermissionError):
     """A controlled-operation prerequisite was not satisfied."""
-
-
-def canonical_json(value: Any) -> str:
-    """Return bounded canonical JSON, rejecting non-finite and non-JSON data."""
-    budget = [20000]
-
-    def visit(item: Any, depth: int) -> None:
-        budget[0] -= 1
-        if depth > MAX_DEPTH or budget[0] < 0:
-            raise ValueError("JSON nesting or item budget exceeded")
-        if item is None or isinstance(item, (str, bool, int)):
-            if isinstance(item, str) and len(item) > MAX_DOCUMENT_BYTES:
-                raise ValueError("JSON string budget exceeded")
-            return
-        if isinstance(item, float):
-            if not math.isfinite(item):
-                raise ValueError("JSON numbers must be finite")
-            return
-        if isinstance(item, dict):
-            if not all(isinstance(key, str) for key in item):
-                raise ValueError("JSON object keys must be strings")
-            for child in item.values():
-                visit(child, depth + 1)
-            return
-        if isinstance(item, list):
-            for child in item:
-                visit(child, depth + 1)
-            return
-        raise ValueError("value is not JSON-compatible")
-
-    visit(value, 0)
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    if len(encoded.encode("utf-8")) > MAX_DOCUMENT_BYTES:
-        raise ValueError("JSON document exceeds 1 MiB")
-    return encoded
 
 
 def request_fingerprint(plugin_id: str, payload: Mapping[str, Any]) -> str:
@@ -71,16 +37,30 @@ def request_fingerprint(plugin_id: str, payload: Mapping[str, Any]) -> str:
 
 def _private_path(raw: str, *, must_exist: bool) -> Path:
     path = Path(raw).expanduser()
-    if not path.is_absolute():
+    if not path.is_absolute() or ".." in path.parts:
         raise ControlDenied("control paths must be absolute and outside the repository")
-    if any(part.is_symlink() for part in (path, *path.parents)):
+    if any(is_link(part) for part in (path, *path.parents)):
         raise ControlDenied("control paths must not contain symbolic links")
+    source_root = Path(__file__).resolve().parent
+    if (source_root.parent / "pyproject.toml").is_file():
+        source_root = source_root.parent
+    if path.is_relative_to(source_root):
+        raise ControlDenied("control paths must be outside the source or installed package")
+    if os.name == "posix":
+        for parent in path.parents:
+            info = parent.stat()
+            # Shared sticky directories such as /tmp cannot replace another
+            # owner's private child. A plain group-writable parent can.
+            if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
+                raise ControlDenied("control path parents must not be writable by other users")
     if must_exist and not path.is_file():
         raise ControlDenied("required control file is missing")
     if path.exists():
         info = path.stat()
         if not stat.S_ISREG(info.st_mode):
             raise ControlDenied("control path must be a regular file")
+        if info.st_nlink != 1:
+            raise ControlDenied("control files must not have hard-link aliases")
         if os.name == "posix" and (info.st_mode & 0o077):
             raise ControlDenied("control files require owner-only permissions (chmod 600)")
         if os.name == "posix" and info.st_uid != os.getuid():
@@ -91,8 +71,7 @@ def _private_path(raw: str, *, must_exist: bool) -> Path:
 def load_private_json(raw: str) -> dict[str, Any]:
     """Read a bounded operator-owned JSON document; never follow a final symlink."""
     path = _private_path(raw, must_exist=True)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    with os.fdopen(os.open(path, flags), "rb") as handle:
+    with open_regular(path, single_link=True) as handle:
         info = os.fstat(handle.fileno())
         if not stat.S_ISREG(info.st_mode):
             raise ControlDenied("approval is not a regular file")
@@ -102,17 +81,9 @@ def load_private_json(raw: str) -> dict[str, Any]:
     if len(raw_bytes) > MAX_DOCUMENT_BYTES:
         raise ControlDenied("approval exceeds 1 MiB")
     try:
-        def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-            result: dict[str, Any] = {}
-            for key, value in pairs:
-                if key in result:
-                    raise ValueError("duplicate JSON key")
-                result[key] = value
-            return result
-        value = json.loads(raw_bytes, object_pairs_hook=unique_object)
+        value = loads_json(raw_bytes)
         if not isinstance(value, dict):
             raise ValueError("approval must be an object")
-        canonical_json(value)
         return value
     except (ValueError, RecursionError, UnicodeError) as exc:
         raise ControlDenied("approval is not valid bounded JSON") from exc
@@ -168,15 +139,22 @@ def _timestamp(value: Any) -> datetime:
         raise ControlDenied("approval timestamps must be ISO-8601 strings with a timezone")
     try:
         timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
+    except (ValueError, OverflowError) as exc:
         raise ControlDenied("invalid approval timestamp") from exc
     if timestamp.utcoffset() is None:
         raise ControlDenied("approval timestamps require an explicit timezone")
-    return timestamp.astimezone(timezone.utc)
+    try:
+        return timestamp.astimezone(timezone.utc)
+    except (ValueError, OverflowError) as exc:
+        raise ControlDenied("approval timestamp is outside the supported range") from exc
 
 
 def review_approval(document: Mapping[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     """Validate administrative completeness, not the authenticity of legal consent."""
+    try:
+        canonical_json(dict(document))
+    except (ValueError, TypeError) as exc:
+        raise ControlDenied("approval must be bounded JSON") from exc
     required = {"schema_version", "authorization", "actor", "asset_owner", "approved_by", "purpose",
                 "legal_basis_reference", "environment", "not_before", "expires_at", "revoked",
                 "request_sha256", "max_uses"}
@@ -188,6 +166,8 @@ def review_approval(document: Mapping[str, Any], *, now: datetime | None = None)
         value = document[key]
         if not isinstance(value, str) or not 3 <= len(value.strip()) <= 512:
             raise ControlDenied(f"approval field {key} must contain 3 to 512 characters")
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ControlDenied(f"approval field {key} must not contain control characters")
     if len(document["authorization"].strip()) < 12:
         raise ControlDenied("authorization reference must contain at least 12 characters")
     if document["actor"].strip().casefold() == document["approved_by"].strip().casefold():
@@ -224,9 +204,14 @@ def _audit_connection() -> sqlite3.Connection:
             pass
     _private_path(str(path), must_exist=True)
     connection = sqlite3.connect(str(path), timeout=5, isolation_level=None)
-    connection.execute("CREATE TABLE IF NOT EXISTS uses (approval TEXT NOT NULL, request_id TEXT PRIMARY KEY)")
-    connection.execute("CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY, event TEXT NOT NULL)")
-    return connection
+    try:
+        connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute("CREATE TABLE IF NOT EXISTS uses (approval TEXT NOT NULL, request_id TEXT PRIMARY KEY)")
+        connection.execute("CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY, event TEXT NOT NULL)")
+        return connection
+    except Exception:
+        connection.close()
+        raise
 
 
 def audit_event(event: str, plugin_id: str, request_id: str, actor: str) -> None:

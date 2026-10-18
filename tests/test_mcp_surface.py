@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+pytest.importorskip("mcp")
+
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client

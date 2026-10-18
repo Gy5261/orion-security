@@ -1,7 +1,7 @@
-# Dependencias Python confirmadas por revisión de código
-# Todos los scripts en orion/scripts/ usan únicamente stdlib (argparse, json, os, socket, urllib, ssl, etc.)
-# No se requieren paquetes externos runtime.
-# Para desarrollo/linting (instalar manualmente si se desea):
-# ruff>=0.4.0
-# markdownlint-cli2
-# (ver pyproject.toml para configuración completa)
+# The base ORION runtime has no third-party dependencies.
+# This compatibility entry point installs the local project. pyproject.toml is
+# the single dependency source; run from the repository root:
+#   python -m pip install -r requirements.txt
+# Optional MCP server: python -m pip install ".[mcp]"
+# Development / offline tests: python -m pip install -e ".[dev,mcp]"
+.

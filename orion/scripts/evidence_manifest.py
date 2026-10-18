@@ -16,10 +16,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from orion.fileio import is_link, open_regular
+
 _CHUNK_SIZE = 1024 * 1024
 _MAX_FILES = 10_000
 _MAX_TAG_LENGTH = 128
 _IGNORED_DIRS = {".git", ".venv", "__pycache__", "node_modules"}
+_MAX_TRAVERSAL_ENTRIES = 100_000
+_MAX_TRAVERSAL_DEPTH = 64
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,27 +37,42 @@ def parse_args() -> argparse.Namespace:
 
 def iter_files(paths: Iterable[str], *, max_files: int = _MAX_FILES) -> list[Path]:
     """Collect stable, explicit paths without following symbolic links."""
-    if not 1 <= max_files <= _MAX_FILES:
+    if type(max_files) is not int or not 1 <= max_files <= _MAX_FILES:
         raise ValueError("max_files must be between 1 and 10000")
     discovered: dict[str, Path] = {}
+    visited = 0
     for item in paths:
         root = Path(item).expanduser()
-        if root.is_symlink():
+        if any(is_link(part) for part in (root, *root.parents)):
             raise ValueError("symbolic links are not valid manifest inputs")
         if root.is_file():
             candidates = [root]
         elif root.is_dir():
             candidates = []
-            for current, directories, filenames in os.walk(root, followlinks=False):
-                directories[:] = sorted(d for d in directories
-                                        if d not in _IGNORED_DIRS and not (Path(current) / d).is_symlink())
-                candidates.extend(Path(current) / name for name in sorted(filenames))
-                if len(candidates) + len(discovered) > max_files:
-                    raise ValueError(f"manifest limit exceeded: {max_files} files")
+            pending = [(root, 0)]
+            while pending:
+                current, depth = pending.pop()
+                with os.scandir(current) as scan:
+                    for entry in scan:
+                        visited += 1
+                        if visited > _MAX_TRAVERSAL_ENTRIES:
+                            raise ValueError("manifest traversal entry budget exceeded")
+                        path = Path(entry.path)
+                        if is_link(path):
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            if entry.name not in _IGNORED_DIRS:
+                                if depth >= _MAX_TRAVERSAL_DEPTH:
+                                    raise ValueError("manifest traversal depth budget exceeded")
+                                pending.append((path, depth + 1))
+                        elif entry.is_file(follow_symlinks=False):
+                            candidates.append(path)
+                            if len(candidates) + len(discovered) > max_files:
+                                raise ValueError(f"manifest limit exceeded: {max_files} files")
         else:
             raise FileNotFoundError(f"not a regular file or directory: {root}")
         for path in candidates:
-            if path.is_symlink():
+            if is_link(path):
                 continue
             info = path.stat()
             if not stat.S_ISREG(info.st_mode):
@@ -68,16 +87,23 @@ def iter_files(paths: Iterable[str], *, max_files: int = _MAX_FILES) -> list[Pat
 
 def _snapshot(path: Path) -> tuple[str, os.stat_result, int]:
     """Hash one regular file using a descriptor; fail if it changes during reading."""
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    with os.fdopen(os.open(path, flags), "rb") as handle:
+    with open_regular(path) as handle:
         initial = os.fstat(handle.fileno())
         if not stat.S_ISREG(initial.st_mode):
             raise ValueError(f"not a regular file: {path.name}")
         digest = hashlib.sha256()
         actual = 0
-        for block in iter(lambda: handle.read(_CHUNK_SIZE), b""):
+        remaining = initial.st_size
+        while remaining:
+            block = handle.read(min(_CHUNK_SIZE, remaining))
+            if not block:
+                break
             digest.update(block)
             actual += len(block)
+            remaining -= len(block)
+        # A continuously growing file must not keep this read running forever.
+        if handle.read(1):
+            raise ValueError(f"file changed during hashing: {path.name}")
         final = os.fstat(handle.fileno())
         if (initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns, initial.st_ino) != (
                 final.st_size, final.st_mtime_ns, final.st_ctime_ns, final.st_ino
