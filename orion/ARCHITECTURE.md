@@ -57,7 +57,7 @@ El timeout general no amplía los límites particulares de procesos o sockets. L
 | Recorrido del catálogo | 10.000 entradas visitadas, profundidad 32; incluye archivos descartados |
 | Búsqueda documental | 32 MiB de contenido inspeccionado, consulta de 2 a 512 caracteres, hasta 100 resultados |
 | Captura de procesos | 2 MiB por stream stdout/stderr |
-| Artefactos externos | 8 MiB, 256 archivos, 4.096 entradas de recorrido, profundidad 16 |
+| Artefactos externos | 8 MiB de contenido; lectura total con un byte centinela adicional; 256 archivos, 4.096 entradas de recorrido, profundidad 16 |
 | TLS controlado | 1–16 IPv4 explícitas, 1–4 workers, 0,1–10 segundos por operación de socket |
 
 El límite JSON se aplica antes y durante la serialización; repetir referencias a una cadena grande no permite construir una salida gigantesca antes del rechazo. Se rechazan números no finitos, claves repetidas y Unicode inválido.

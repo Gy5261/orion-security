@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "recorded_at_utc": "2026-10-18T05:16:59.733550+00:00",
+  "recorded_at_utc": "2026-10-18T05:31:13.257974+00:00",
   "repository": "https://github.com/Gy5261/orion-security",
   "baseline_commit": "dd714dfd5e36d128a934600bb9c5a39af8b3f555",
   "runtime_version": "2.1.1",
@@ -16,13 +16,13 @@
       "operating_system": "Linux",
       "mcp_installed": true,
       "counts": {
-        "tests": 462,
+        "tests": 464,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "passed": 462
+        "passed": 464
       },
-      "seconds": 8.175,
+      "seconds": 8.654,
       "command": "python -m pytest --allow-hosts=127.0.0.1,::1 --allow-unix-socket --timeout=30 --junitxml=tests.xml",
       "network_scope": "loopback only; no external targets"
     },
@@ -31,13 +31,13 @@
       "operating_system": "Linux",
       "mcp_installed": true,
       "counts": {
-        "tests": 462,
+        "tests": 464,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "passed": 462
+        "passed": 464
       },
-      "seconds": 8.364,
+      "seconds": 8.11,
       "command": "python -m pytest --allow-hosts=127.0.0.1,::1 --allow-unix-socket --timeout=30 --junitxml=tests.xml",
       "network_scope": "loopback only; no external targets"
     },
@@ -46,13 +46,13 @@
       "operating_system": "Linux",
       "mcp_installed": false,
       "counts": {
-        "tests": 375,
+        "tests": 377,
         "failures": 0,
         "errors": 0,
         "skipped": 6,
-        "passed": 369
+        "passed": 371
       },
-      "seconds": 1.647,
+      "seconds": 1.766,
       "command": "python -m pytest --allow-hosts=127.0.0.1,::1 --allow-unix-socket --timeout=30 --junitxml=tests.xml",
       "network_scope": "loopback only; no external targets"
     }
@@ -162,7 +162,7 @@
     "disposition": "Low findings retained and reviewed: controlled subprocess use and error-handling fallbacks. No blanket suppressions added."
   },
   "remote_ci": {
-    "status_at_local_validation": "not_yet_run",
+    "status_at_local_validation": "awaiting_followup_run_after_windows_metadata_fix",
     "configured_matrix": [
       {
         "os": "ubuntu-24.04",
@@ -189,7 +189,19 @@
         "python": "3.15"
       }
     ],
-    "evidence_policy": "Consult the pull request Actions runs for actual remote results. Matrix entries do not imply successful execution. Windows was not executed locally."
+    "evidence_policy": "Consult the pull request Actions runs for actual remote results. Matrix entries do not imply successful execution. Windows was not executed locally.",
+    "pull_request": "https://github.com/Gy5261/orion-security/pull/10",
+    "first_run": {
+      "commit": "f792db35931ca984a092c19b14de5245ff68123b",
+      "url": "https://github.com/Gy5261/orion-security/actions/runs/39100565070",
+      "linux_test_jobs": "passed on 3.10.22, 3.12.15, 3.14.8, 3.15.0",
+      "quality_package_core_jobs": "passed",
+      "windows_test_jobs": "three failures each on 3.12.10 and 3.15.0; identical artifact metadata cause",
+      "correction": "Use complete os.stat metadata without following links on the path traversal branch; preserve descriptor-based POSIX traversal and hardlink rejection.",
+      "additional_regression": "Charge bytes consumed by truncated artifact reads. The aggregate bound includes one overflow sentinel, even with multiple growing files.",
+      "dependency_review_url": "https://github.com/Gy5261/orion-security/actions/runs/39100565080",
+      "dependency_review_status": "passed; dependency declarations unchanged by the followup"
+    }
   },
   "limits": [
     "External binaries remain trusted local code, without global memory/disk or network isolation.",

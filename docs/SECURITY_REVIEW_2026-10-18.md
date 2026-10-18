@@ -18,6 +18,7 @@ Se conservan los contratos de entrada principales, los nueve identificadores de 
 | Solicitudes | Objetos mutables podían cambiar entre validación y ejecución | Snapshot JSON antes de la política |
 | Deadlines | Timeout general informativo, callbacks síncronos en el event loop | Presupuesto compartido, cancelación, rechazo de éxitos tardíos y pool MCP acotado |
 | Procesos | Limpieza incompleta en interrupción/cancelación, captura y artefactos con bordes abiertos | Sesión/job por proceso, limpieza incondicional y lectura acotada |
+| Artefactos Windows | `DirEntry.stat()` no proporcionaba identidad y número de enlaces utilizables; se descartaban archivos válidos | Metadata completa con `os.stat(..., follow_symlinks=False)` en la rama de rutas; conserva el rechazo de hardlinks |
 | Argumentos y entorno | Valores como opciones de Sherlock y variables de inyección de intérpretes | Validadores específicos, entorno filtrado y redacción |
 | MCP HTTP | Content-Length patológico, framing contradictorio, Host/Origin divergentes del SDK | Guard estricto y listas compartidas, pruebas ASGI y transportes |
 | MCP errores/configuración | Excepciones con datos locales y configuración de cliente mal escapada | Frontera uniforme, validación de URLs, quoting y errores sanitizados |
@@ -31,11 +32,13 @@ Las pruebas exactas residen en `tests/test_io_security.py`, `test_adapter_securi
 
 La línea base original pasó **197 pruebas** en Python 3.12.14 con SDK MCP 1.30.0. Las pruebas que necesitan sockets locales se ejecutaron con permiso de loopback y guard de pytest; el sandbox inicial las bloqueaba y esos rechazos no se contabilizan como defectos del producto.
 
-La validación integrada pasó **462 pruebas en Python 3.10.22** y **462 en Python 3.12.14**, sin fallos ni omisiones en ninguno de los dos entornos con MCP. En un entorno nuevo de Python 3.10.22 **sin MCP**, pasaron **369 pruebas**, con seis omisiones correspondientes exclusivamente al SDK opcional. Son 265 casos adicionales respecto de la línea base; no se suman las ejecuciones de distintos intérpretes como pruebas distintas.
+La validación integrada pasó **464 pruebas en Python 3.10.22** y **464 en Python 3.12.14**, sin fallos ni omisiones en ninguno de los dos entornos con MCP. En un entorno nuevo de Python 3.10.22 **sin MCP**, pasaron **371 pruebas**, con seis omisiones correspondientes exclusivamente al SDK opcional. Son 267 casos adicionales respecto de la línea base; no se suman las ejecuciones de distintos intérpretes como pruebas distintas.
 
 También pasan Ruff sobre código, scripts, herramientas y tests; mypy sobre 37 archivos del núcleo tipado; compilación; validación integral de contratos; las seis comprobaciones de scripts; y las referencias de 65 documentos, sin enlaces locales rotos. La prueba de archivos en crecimiento cuenta los bytes realmente leídos, incluidas las lecturas rechazadas, y verifica que no exceden el presupuesto de la consulta.
 
 Las versiones, comandos, tiempos y comprobaciones de instalación se registran en [validation-2026-10-18.json](validation-2026-10-18.json). El registro distingue la ejecución local de los jobs de CI, incluidos Windows y las demás versiones de Python, que requieren evidencia de sus propios runners.
+
+La primera ejecución real del [PR #10](https://github.com/Gy5261/orion-security/pull/10) pasó todos los jobs Linux, calidad, paquetes y dependencias. Windows 3.12 y 3.15 detectaron tres regresiones con una misma causa: metadata incompleta de `DirEntry`. Se corrigió la obtención de metadata y se añadió una prueba que conserva archivos válidos y sigue rechazando hardlinks. En esa revisión también se corrigió la contabilidad de artefactos truncados: tres archivos crecientes ya no pueden gastar repetidamente el mismo presupuesto; una prueba instrumentada comprueba una sola lectura de presupuesto más un byte centinela. El resultado remoto vigente corresponde al último commit del PR, no a aquella primera ejecución.
 
 ## Dependencias y análisis estático
 
@@ -46,7 +49,7 @@ Bandit se utilizó como apoyo de revisión, no como prueba de ausencia de defect
 ## Límites que permanecen
 
 - No hay sandbox de código Python hostil, límites globales de RAM/disco de binarios externos ni autenticación OAuth multiusuario.
-- Windows Job Objects y rechazo de reparse points requieren validación en los jobs Windows; una prueba Linux no los demuestra.
+- Windows Job Objects y rechazo de reparse points se comprueban en los jobs Windows; una prueba Linux no los demuestra.
 - La cancelación de Python es cooperativa; una herramienta hostil puede eludir un grupo POSIX o generar trabajo fuera de él.
 - El perfil sigue denegando OSINT online y creación de tickets; no se realizaron evaluaciones de terceros.
 - TLS informa negociación/huella y no certifica confianza PKI. Las heurísticas y la clasificación IOC no demuestran vulnerabilidades.

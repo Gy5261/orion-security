@@ -10,9 +10,10 @@ import sys
 import time
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import pytest
 
@@ -208,6 +209,36 @@ def test_artifacts_skip_links_and_special_files(tmp_path: Path) -> None:
     assert collect_artifacts(output) == {"safe.json": {"ok": True}}
 
 
+def test_artifact_path_walk_uses_full_windows_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows directory enumeration omits identity and hardlink metadata."""
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "safe.json").write_text('{"ok":true}', encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private-hardlinked-data", encoding="utf-8")
+    os.link(outside, output / "linked.txt")
+    original_scandir = os.scandir
+
+    class IncompleteDirEntry:
+        def __init__(self, entry: os.DirEntry[str]) -> None:
+            self._entry = entry
+            self.name = entry.name
+
+        def stat(self, *, follow_symlinks: bool = True) -> os.stat_result:
+            fields = list(self._entry.stat(follow_symlinks=follow_symlinks))
+            fields[1] = fields[2] = fields[3] = 0  # st_ino, st_dev, st_nlink
+            return os.stat_result(fields)
+
+    @contextmanager
+    def windows_scandir(path: Path) -> Iterator[Iterator[IncompleteDirEntry]]:
+        with original_scandir(path) as entries:
+            yield (IncompleteDirEntry(entry) for entry in entries)
+
+    monkeypatch.setattr(adapters.os, "supports_fd", set())
+    monkeypatch.setattr(adapters.os, "scandir", windows_scandir)
+    assert collect_artifacts(output) == {"safe.json": {"ok": True}}
+
+
 def test_artifact_reads_remain_bounded_after_stat_race(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "growing.txt").write_bytes(b"x" * 2048)
     monkeypatch.setattr(adapters, "_MAX_ARTIFACT_BYTES", 1024)
@@ -221,6 +252,46 @@ def test_artifact_reads_remain_bounded_after_stat_race(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(adapters.os, "fstat", stale_fstat)
     assert collect_artifacts(tmp_path)["growing.txt"]["truncated"] is True
+
+
+def test_growing_artifacts_share_one_actual_read_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for index in range(3):
+        (tmp_path / f"growing-{index}.txt").write_bytes(b"x" * 2048)
+    monkeypatch.setattr(adapters, "_MAX_ARTIFACT_BYTES", 1024)
+    original_fstat = os.fstat
+    original_fdopen = os.fdopen
+    actual_reads: list[int] = []
+
+    def stale_fstat(descriptor: int) -> os.stat_result:
+        fields = list(original_fstat(descriptor))
+        fields[6] = 0  # Every file claims to fit, including after exhaustion.
+        return os.stat_result(fields)
+
+    class CountingReader:
+        def __init__(self, descriptor: int, mode: str) -> None:
+            self._handle = original_fdopen(descriptor, mode)
+
+        def __enter__(self) -> CountingReader:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            self._handle.close()
+
+        def fileno(self) -> int:
+            return self._handle.fileno()
+
+        def read(self, size: int) -> bytes:
+            data = self._handle.read(size)
+            actual_reads.append(len(data))
+            return data
+
+    monkeypatch.setattr(adapters.os, "fstat", stale_fstat)
+    monkeypatch.setattr(adapters.os, "fdopen", CountingReader)
+    result = collect_artifacts(tmp_path)
+    assert len(result) == 3
+    assert all(item["truncated"] for item in result.values())
+    assert sum(actual_reads) == 1024 + 1
+    assert len(actual_reads) == 1
 
 
 @pytest.mark.parametrize("budget, value", [("_MAX_ARTIFACT_ENTRIES", 2), ("_MAX_ARTIFACT_FILES", 2)])

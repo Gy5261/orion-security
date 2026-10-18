@@ -346,14 +346,16 @@ def collect_artifacts(root: str | Path) -> JsonObject:
                 raise ValueError("artifact file count exceeds the 256-file limit")
             remaining = _MAX_ARTIFACT_BYTES - consumed
             name = str(relative)
-            if info.st_size > remaining:
+            if remaining < 0 or info.st_size > remaining:
                 files[name] = {"truncated": True, "size_bytes": info.st_size}
                 return
             raw = handle.read(remaining + 1)
+            # A raced/truncated read also spent the aggregate I/O budget. Once
+            # its one-byte sentinel is consumed, later files are never read.
+            consumed += len(raw)
             if len(raw) > remaining:
                 files[name] = {"truncated": True, "size_bytes": max(info.st_size, len(raw))}
                 return
-            consumed += len(raw)
         if relative.suffix.lower() == ".json":
             try:
                 files[name] = loads_json(raw, max_bytes=_MAX_ARTIFACT_BYTES)
@@ -374,7 +376,11 @@ def collect_artifacts(root: str | Path) -> JsonObject:
         for entry in sorted(entries, key=lambda item: item.name):
             check_execution()
             try:
-                info = entry.stat(follow_symlinks=False)
+                # Windows DirEntry.stat leaves inode/device/link count at zero.
+                # Read full metadata for path traversal without following links;
+                # retain the descriptor-relative POSIX branch unchanged.
+                info = (entry.stat(follow_symlinks=False) if isinstance(directory, int)
+                        else os.stat(directory / entry.name, follow_symlinks=False))
             except FileNotFoundError:
                 continue
             if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
